@@ -1,1213 +1,536 @@
-# Qwen3-VL
+# Drive Agent Pipeline
 
+A multi-stage VQA pipeline for autonomous driving scene understanding on the nuScenes dataset, powered by Qwen3-VL served via vLLM.
 
-<p align="center">
-    <img src="https://qianwen-res.oss-accelerate.aliyuncs.com/Qwen3-VL/qwen3vllogo.png" width="400"/>
-<p>
-
-<p align="center">
-        💜 <a href="https://chat.qwenlm.ai/"><b>Qwen Chat</b></a>&nbsp&nbsp | &nbsp&nbsp🤗 <a href="https://huggingface.co/collections/Qwen/qwen3-vl-68d2a7c1b8a8afce4ebd2dbe">Hugging Face</a>&nbsp&nbsp | &nbsp&nbsp🤖 <a href="https://modelscope.cn/collections/Qwen3-VL-5c7a94c8cb144b">ModelScope</a>&nbsp&nbsp | &nbsp&nbsp📑 <a href="https://qwen.ai/blog?id=99f0335c4ad9ff6153e517418d48535ab6d8afef&from=research.latest-advancements-list">Blog</a>&nbsp&nbsp | &nbsp&nbsp📚 <a href="https://github.com/QwenLM/Qwen3-VL/tree/main/cookbooks">Cookbooks</a>&nbsp&nbsp | &nbsp&nbsp📑 <a href="https://arxiv.org/pdf/2511.21631">Paper</a>&nbsp&nbsp
-<br>
-🖥️ <a href="https://huggingface.co/spaces/Qwen/Qwen3-VL-Demo">Demo</a>&nbsp&nbsp | &nbsp&nbsp💬 <a href="https://github.com/QwenLM/Qwen/blob/main/assets/wechat.png">WeChat (微信)</a>&nbsp&nbsp | &nbsp&nbsp🫨 <a href="https://discord.gg/CV4E9rpNSD">Discord</a>&nbsp&nbsp | &nbsp&nbsp📑 <a href="https://help.aliyun.com/zh/model-studio/developer-reference/qwen-vl-api">API</a>&nbsp&nbsp | &nbsp&nbsp🖥️ <a href="https://gallery.pai-ml.com/#/preview/deepLearning/cv/qwen2.5-vl">PAI-DSW</a>
-</p>
-
-
-
-## Introduction
-Meet Qwen3-VL — the most powerful vision-language model in the Qwen series to date.
-
-This generation delivers comprehensive upgrades across the board: superior text understanding & generation, deeper visual perception & reasoning, extended context length, enhanced spatial and video dynamics comprehension, and stronger agent interaction capabilities.
-
-Available in Dense and MoE architectures that scale from edge to cloud, with Instruct and reasoning‑enhanced Thinking editions for flexible, on‑demand deployment.
-
-
-#### Key Enhancements:
-
-* **Visual Agent**: Operates PC/mobile GUIs—recognizes elements, understands functions, invokes tools, completes tasks.
-
-* **Visual Coding Boost**: Generates Draw.io/HTML/CSS/JS from images/videos.
-
-* **Advanced Spatial Perception**: Judges object positions, viewpoints, and occlusions; provides stronger 2D grounding and enables 3D grounding for spatial reasoning and embodied AI.
-
-* **Long Context & Video Understanding**: Native 256K context, expandable to 1M; handles books and hours-long video with full recall and second-level indexing.
-
-* **Enhanced Multimodal Reasoning**: Excels in STEM/Math—causal analysis and logical, evidence-based answers.
-
-* **Upgraded Visual Recognition**: Broader, higher-quality pretraining is able to “recognize everything”—celebrities, anime, products, landmarks, flora/fauna, etc.
-
-* **Expanded OCR**: Supports 32 languages (up from 10); robust in low light, blur, and tilt; better with rare/ancient characters and jargon; improved long-document structure parsing.
-
-* **Text Understanding on par with pure LLMs**: Seamless text–vision fusion for lossless, unified comprehension.
-
-
-#### Model Architecture Updates:
-
-<p align="center">
-    <img src="https://qianwen-res.oss-accelerate.aliyuncs.com/Qwen3-VL/qwen3vl_arc.jpg" width="80%"/>
-<p>
-
-
-1. **Interleaved-MRoPE**: Full‑frequency allocation over time, width, and height via robust positional embeddings, enhancing long‑horizon video reasoning.
-
-2. **DeepStack**: Fuses multi‑level ViT features to capture fine‑grained details and sharpen image–text alignment.
-
-3. **Text–Timestamp Alignment:** Moves beyond T‑RoPE to precise, timestamp‑grounded event localization for stronger video temporal modeling.
-
-
-
-
-
-
-## News
-* 2025.11.27: We have released the [**Qwen3-VL paper**](https://arxiv.org/pdf/2511.21631), which introduces many technical details about Qwen3-VL, and we hope it will be helpful to everyone.
-* 2025.10.21: We have released the **Qwen3-VL-2B** ([Instruct](https://huggingface.co/Qwen/Qwen3-VL-2B-Instruct)/[Thinking](https://huggingface.co/Qwen/Qwen3-VL-2B-Thinking)) and **Qwen3-VL-32B** ([Instruct](https://huggingface.co/Qwen/Qwen3-VL-32B-Instruct)/[Thinking](https://huggingface.co/Qwen/Qwen3-VL-32B-Thinking)). Enjoy it!
-* 2025.10.15: We have released the **Qwen3-VL-4B** ([Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct)/[Thinking](https://huggingface.co/Qwen/Qwen3-VL-4B-Thinking)) and **Qwen3-VL-8B** ([Instruct](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct)/[Thinking](https://huggingface.co/Qwen/Qwen3-VL-8B-Thinking)). Enjoy it!
-* 2025.10.4: We have released the [Qwen3-VL-30B-A3B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-30B-A3B-Instruct) and [Qwen3-VL-30B-A3B-Thinking](https://huggingface.co/Qwen/Qwen3-VL-30B-A3B-Thinking). We have also released the FP8 version of the Qwen3-VL models — available in our [HuggingFace collection](https://huggingface.co/collections/Qwen/qwen3-vl-68d2a7c1b8a8afce4ebd2dbe) and [ModelScope collection](https://modelscope.cn/collections/Qwen3-VL-5c7a94c8cb144b).
-* 2025.09.23: We have released the [Qwen3-VL-235B-A22B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-235B-A22B-Instruct) and [Qwen3-VL-235B-A22B-Thinking](https://huggingface.co/Qwen/Qwen3-VL-235B-A22B-Thinking). For more details, please check our [blog](https://qwen.ai/blog?id=99f0335c4ad9ff6153e517418d48535ab6d8afef&from=research.latest-advancements-list)!
-* 2025.04.08: We provide the [code](https://github.com/QwenLM/Qwen2.5-VL/tree/main/qwen-vl-finetune) for fine-tuning Qwen2-VL and Qwen2.5-VL.
-* 2025.03.25: We have released the [Qwen2.5-VL-32B](https://huggingface.co/Qwen/Qwen2.5-VL-32B-Instruct). It is smarter and its responses align more closely with human preferences. For more details, please check our [blog](https://qwenlm.github.io/blog/qwen2.5-vl-32b/)!
-* 2025.02.20: we have released the [Qwen2.5-VL Technical Report](https://arxiv.org/abs/2502.13923). Alongside the report, we have also released AWQ-quantized models for Qwen2.5-VL in three different sizes: [3B](https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct-AWQ), [7B](https://huggingface.co/Qwen/Qwen2.5-VL-7B-Instruct-AWQ) , and [72B](https://huggingface.co/Qwen/Qwen2.5-VL-72B-Instruct-AWQ) parameters.
-* 2025.01.28: We have released the [Qwen2.5-VL series](https://huggingface.co/Qwen). For more details, please check our [blog](https://qwenlm.github.io/blog/qwen2.5-vl/)!
-* 2024.12.25: We have released the [QvQ-72B-Preview](https://huggingface.co/Qwen/QVQ-72B-Preview). QvQ-72B-Preview is an experimental research model, focusing on enhancing visual reasoning capabilities. For more details, please check our [blog](https://qwenlm.github.io/blog/qvq-72b-preview/)!
-* 2024.09.19: The instruction-tuned [Qwen2-VL-72B model](https://huggingface.co/Qwen/Qwen2-VL-72B-Instruct) and its quantized version [[AWQ](https://huggingface.co/Qwen/Qwen2-VL-72B-Instruct-AWQ), [GPTQ-Int4](https://huggingface.co/Qwen/Qwen2-VL-72B-Instruct-GPTQ-Int4), [GPTQ-Int8](https://huggingface.co/Qwen/Qwen2-VL-72B-Instruct-GPTQ-Int8)] are now available. We have also released the [Qwen2-VL paper](https://arxiv.org/pdf/2409.12191) simultaneously.
-* 2024.08.30: We have released the [Qwen2-VL series](https://huggingface.co/collections/Qwen/qwen2-vl-66cee7455501d7126940800d). The 2B and 7B models are now available, and the 72B model for open source is coming soon. For more details, please check our [blog](https://qwenlm.github.io/blog/qwen2-vl/)!
-
-
-## Performance
-
-### Visual Tasks
-
-<div style="display: flex; justify-content: center; gap: 16px; flex-wrap: wrap;">
-    <img src="https://qianwen-res.oss-accelerate.aliyuncs.com/Qwen3-VL/table_nothinking_vl.jpg" width="24%" />
-    <img src="https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen3-VL/table_thinking_vl_.jpg" width="24%" />
-	<img src="https://qianwen-res.oss-accelerate.aliyuncs.com/Qwen3-VL/table_nothinking_vl-30a3.jpg" width="26%" />
-    <img src="https://qianwen-res.oss-accelerate.aliyuncs.com/Qwen3-VL/table_thinking_vl_30A3.jpg" width="22.5%" />
-</div>
-
-<div style="display: flex; justify-content: center; gap: 16px; flex-wrap: wrap;">
-    <img src="https://qianwen-res.oss-accelerate.aliyuncs.com/Qwen3-VL/qwen3vl_2b_32b_vl_instruct.jpg" width="30%" />
-    <img src="https://qianwen-res.oss-accelerate.aliyuncs.com/Qwen3-VL/qwen3vl_2b_32b_vl_thinking.jpg" width="24%" />
-</div>
-
-
-### Text-Centric Tasks
-
-<div style="display: flex; justify-content: center; gap: 16px; flex-wrap: wrap;">
-    <img src="https://qianwen-res.oss-accelerate.aliyuncs.com/Qwen3-VL/table_nothinking_text.jpg" width="30%" />
-    <img src="https://qianwen-res.oss-accelerate.aliyuncs.com/Qwen3-VL/table_thinking_text.jpg" width="32%" />
-	<img src="https://qianwen-res.oss-accelerate.aliyuncs.com/Qwen3-VL/table_nothinking_text-30a3.jpg" width="30%" />
-</div>
-
-
-
-<div style="display: flex; justify-content: center; gap: 16px; flex-wrap: wrap;">
-    <img src="https://qianwen-res.oss-accelerate.aliyuncs.com/Qwen3-VL/qwen3vl_4b_8b_text_instruct.jpg" width="33%" />
-    <img src="https://qianwen-res.oss-accelerate.aliyuncs.com/Qwen3-VL/qwen3vl_4b_8b_text_thinking.jpg" width="28%" />
-</div>
-
-
-## Cookbooks
-
-We are preparing [cookbooks](https://github.com/QwenLM/Qwen3-VL/tree/main/cookbooks) for many capabilities, including recognition, localization, document parsing, video understanding, key information extraction, and more. Welcome to learn more!
-
-| Cookbook | Description | Open |
-| -------- | ----------- | ---- |
-| [Omni Recognition](https://github.com/QwenLM/Qwen3-VL/blob/main/cookbooks/omni_recognition.ipynb) | Not only identify animals, plants, people, and scenic spots but also recognize various objects such as cars and merchandise. | [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/QwenLM/Qwen3-VL/blob/main/cookbooks/omni_recognition.ipynb) |
-| [Powerful Document Parsing Capabilities](https://github.com/QwenLM/Qwen3-VL/blob/main/cookbooks/document_parsing.ipynb) | The parsing of documents has reached a higher level, including not only text but also layout position information and our Qwen HTML format. | [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/QwenLM/Qwen3-VL/blob/main/cookbooks/document_parsing.ipynb) |
-| [Precise Object Grounding Across Formats](https://github.com/QwenLM/Qwen3-VL/blob/main/cookbooks/2d_grounding.ipynb) | Using relative position coordinates, it supports both boxes and points, allowing for diverse combinations of positioning and labeling tasks. | [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/QwenLM/Qwen3-VL/blob/main/cookbooks/2d_grounding.ipynb) |
-| [General OCR and Key Information Extraction](https://github.com/QwenLM/Qwen3-VL/blob/main/cookbooks/ocr.ipynb) | Stronger text recognition capabilities in natural scenes and multiple languages, supporting diverse key information extraction needs. | [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/QwenLM/Qwen3-VL/blob/main/cookbooks/ocr.ipynb) |
-| [Video Understanding](https://github.com/QwenLM/Qwen3-VL/blob/main/cookbooks/video_understanding.ipynb) | Better video OCR, long video understanding, and video grounding. | [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/QwenLM/Qwen3-VL/blob/main/cookbooks/video_understanding.ipynb) |
-| [Mobile Agent](https://github.com/QwenLM/Qwen3-VL/blob/main/cookbooks/mobile_agent.ipynb) | Locate and think for mobile phone control. | [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/QwenLM/Qwen3-VL/blob/main/cookbooks/mobile_agent.ipynb) |
-| [Computer-Use Agent](https://github.com/QwenLM/Qwen3-VL/blob/main/cookbooks/computer_use.ipynb) | Locate and think for controlling computers and Web. | [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/QwenLM/Qwen3-VL/blob/main/cookbooks/computer_use.ipynb) |
-| [3D Grounding](https://github.com/QwenLM/Qwen3-VL/blob/main/cookbooks/3d_grounding.ipynb) | Provide accurate 3D bounding boxes for both indoor and outdoor objects. | [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/QwenLM/Qwen3-VL/blob/main/cookbooks/3d_grounding.ipynb) |
-| [Thinking with Images](https://github.com/QwenLM/Qwen3-VL/blob/main/cookbooks/think_with_images.ipynb) | Utilize image_zoom_in_tool and search_tool to facilitate the model’s precise comprehension of fine-grained visual details within images. | [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/QwenLM/Qwen3-VL/blob/main/cookbooks/think_with_images.ipynb) |
-| [MultiModal Coding](https://github.com/QwenLM/Qwen3-VL/blob/main/cookbooks/mmcode.ipynb) | Generate accurate code based on rigorous comprehension of multimodal information. | [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/QwenLM/Qwen3-VL/blob/main/cookbooks/mmcode.ipynb) |
-| [Long Document Understanding](https://github.com/QwenLM/Qwen3-VL/blob/main/cookbooks/long_document_understanding.ipynb) | Achieve rigorous semantic comprehension of ultra-long documents. | [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/QwenLM/Qwen3-VL/blob/main/cookbooks/long_document_understanding.ipynb) |
-| [Spatial Understanding](https://github.com/QwenLM/Qwen3-VL/blob/main/cookbooks/spatial_understanding.ipynb) | See, understand and reason about the spatial information | [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/QwenLM/Qwen3-VL/blob/main/cookbooks/spatial_understanding.ipynb) |
-
-## Quickstart
-
-Below, we provide simple examples to show how to use Qwen3-VL with 🤖 ModelScope and 🤗 Transformers.
+## Pipeline Overview
 
 ```
-# The Qwen3-VL model requires transformers >= 4.57.0
-pip install "transformers>=4.57.0"
+Stage 1A: Risk Assessment      Analyze driving risks, hazards, and TTC per sample
+Stage 1B: Traffic Analysis      Identify traffic signal states per sample
+                                        |
+                          (Stage 1A + 1B results feed into Stage 2)
+                                        |
+Stage 2:  Question Selector     Select applicable question templates from the question bank
+                                        |
+                          (Stage 2 outputs feed into Stage 3)
+                                        |
+Stage 3:  Answer Generator      Generate grounded QA pairs with contrastive answers
 ```
 
-### 🤖 ModelScope
-We strongly advise users especially those in mainland China to use ModelScope. `snapshot_download` can help you solve issues concerning downloading checkpoints.
+Stages 1A and 1B are independent and can run in parallel.
+Stage 2 requires both Stage 1A and 1B results.
+Stage 3 requires Stage 2 results.
 
-### Using 🤗 Transformers to Chat
+---
 
-Here we show a code snippet to show you how to use the chat model with `transformers`:
+## Prerequisites
 
-```python
-from transformers import AutoModelForImageTextToText, AutoProcessor
+### vLLM Server
 
-# default: Load the model on the available device(s)
-model = AutoModelForImageTextToText.from_pretrained(
-    "Qwen/Qwen3-VL-235B-A22B-Instruct", dtype="auto", device_map="auto"
-)
-
-# We recommend enabling flash_attention_2 for better acceleration and memory saving, especially in multi-image and video scenarios.
-# model = AutoModelForImageTextToText.from_pretrained(
-#     "Qwen/Qwen3-VL-235B-A22B-Instruct",
-#     dtype=torch.bfloat16,
-#     attn_implementation="flash_attention_2",
-#     device_map="auto",
-# )
-
-processor = AutoProcessor.from_pretrained("Qwen/Qwen3-VL-235B-A22B-Instruct")
-
-messages = [
-    {
-        "role": "user",
-        "content": [
-            {
-                "type": "image",
-                "image": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg",
-            },
-            {"type": "text", "text": "Describe this image."},
-        ],
-    }
-]
-
-# Preparation for inference
-inputs = processor.apply_chat_template(
-    messages,
-    tokenize=True,
-    add_generation_prompt=True,
-    return_dict=True,
-    return_tensors="pt"
-)
-inputs = inputs.to(model.device)
-
-# Inference: Generation of the output
-generated_ids = model.generate(**inputs, max_new_tokens=128)
-generated_ids_trimmed = [
-    out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-]
-output_text = processor.batch_decode(
-    generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-)
-print(output_text)
-```
-
-<!-- <details>
-<summary>Minimum VRAM requirements</summary>
-
-| Precision | Qwen2.5-VL-3B | Qwen2.5-VL-7B | Qwen2.5-VL-72B |
-|-----------|------------| --------- | -------- |
-| FP32      | 11.5 GB    | 26.34 GB  | 266.21 GB |
-| BF16      | 5.75 GB    | 13.17 GB  | 133.11 GB |
-| INT8      | 2.87 GB    | 6.59 GB   | 66.5 GB |
-| INT4      | 1.44 GB    | 3.29 GB   | 33.28 GB |
-
-Note: The table above presents the theoretical minimum video memory requirements for inference with `transformers`; however, in practice, the actual memory usage is typically at least 1.2 times higher. For more information, see the linked resource [here](https://huggingface.co/docs/accelerate/main/en/usage_guides/model_size_estimator).
-</details> -->
-
-
-<details>
-<summary>Multi image inference</summary>
-
-```python
-# Messages containing multiple images and a text query
-messages = [
-    {
-        "role": "user",
-        "content": [
-            {"type": "image", "image": "file:///path/to/image1.jpg"},
-            {"type": "image", "image": "file:///path/to/image2.jpg"},
-            {"type": "text", "text": "Identify the similarities between these images."},
-        ],
-    }
-]
-
-# Preparation for inference
-inputs = processor.apply_chat_template(
-    messages,
-    tokenize=True,
-    add_generation_prompt=True,
-    return_dict=True,
-    return_tensors="pt"
-)
-inputs = inputs.to(model.device)
-
-# Inference: Generation of the output
-generated_ids = model.generate(**inputs, max_new_tokens=128)
-generated_ids_trimmed = [
-    out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-]
-output_text = processor.batch_decode(
-    generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-)
-print(output_text)
-```
-</details>
-
-<details>
-<summary>Video inference</summary>
-
-```python
-# Messages containing a video url(or a local path) and a text query
-messages = [
-    {
-        "role": "user",
-        "content": [
-            {
-                "type": "video",
-                "video": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/space_woaudio.mp4",
-            },
-            {"type": "text", "text": "Describe this video."},
-        ],
-    }
-]
-
-# Preparation for inference
-inputs = processor.apply_chat_template(
-    messages,
-    tokenize=True,
-    add_generation_prompt=True,
-    return_dict=True,
-    return_tensors="pt"
-)
-inputs = inputs.to(model.device)
-
-# Inference: Generation of the output
-generated_ids = model.generate(**inputs, max_new_tokens=128)
-generated_ids_trimmed = [
-    out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-]
-output_text = processor.batch_decode(
-    generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-)
-print(output_text)
-```
-</details>
-
-<details>
-<summary>Batch inference</summary>
-
-```python
-# for batch generation, padding_side should be set to left!
-processor.tokenizer.padding_side = 'left'
-
-# Sample messages for batch inference
-messages1 = [
-    {
-        "role": "user",
-        "content": [
-            {"type": "image", "image": "file:///path/to/image1.jpg"},
-            {"type": "image", "image": "file:///path/to/image2.jpg"},
-            {"type": "text", "text": "What are the common elements in these pictures?"},
-        ],
-    }
-]
-messages2 = [
-    {"role": "system", "content": [{"type": "text", "text": "You are a helpful assistant."}]},
-    {"role": "user", "content": [{"type": "text", "text": "Who are you?"}]},
-]
-# Combine messages for batch processing
-messages = [messages1, messages2]
-
-# Preparation for inference
-inputs = processor.apply_chat_template(
-    messages,
-    tokenize=True,
-    add_generation_prompt=True,
-    return_dict=True,
-    return_tensors="pt",
-    padding=True # padding should be set for batch generation!
-)
-inputs = inputs.to(model.device)
-
-# Inference: Generation of the output
-generated_ids = model.generate(**inputs, max_new_tokens=128)
-generated_ids_trimmed = [
-    out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-]
-output_text = processor.batch_decode(
-    generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-)
-print(output_text)
-```
-</details>
-
-<details>
-<summary>Pixel Control via Official Processor</summary>
-
-Using the official HF processor, we can conveniently control the budget of visual tokens. Since the Qwen3-VL processor separates image and video processing, we can independently configure the pixel budget for each modality.
-- **For the image processor**:  
-  The parameter `size['longest_edge']` originally corresponds to `max_pixels`, which defines the maximum number of pixels allowed for an image (i.e., for an image of height H and width W, H × W must not exceed `max_pixels`; image channels are ignored for simplicity).  
-  Similarly, `size['shortest_edge']` corresponds to `min_pixels`, specifying the minimum allowable pixel count for an image.
-
-- **For the video processor**:  
-  The interpretation differs slightly. `size['longest_edge']` represents the maximum total number of pixels across all frames in a video — for a video of shape T×H×W, the product T×H×W must not exceed `size['longest_edge']`.  
-  Similarly, `size['shortest_edge']` sets the minimum total pixel budget for the video.
-
-```python
-processor = AutoProcessor.from_pretrained("Qwen/Qwen3-VL-235B-A22B-Instruct")
-
-# budget for image processor, since the compression ratio is 32 for Qwen3-VL, we can set the number of visual tokens of a single image to 256-1280 (32× spatial compression)
-processor.image_processor.size = {"longest_edge": 1280*32*32, "shortest_edge": 256*32*32}
-
-# budget for video processor, we can set the number of visual tokens of a single video to 256-16384 (32× spatial compression + 2× temporal compression)
-processor.video_processor.size = {"longest_edge": 16384*32*32*2, "shortest_edge": 256*32*32*2}
-```
-
-- You can further control the **sample fps** or **sample frames** of video, as shown below.
-
-```python
-messages = [
-    {
-        "role": "user",
-        "content": [
-            {
-                "type": "video",
-                "video": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/space_woaudio.mp4",
-            },
-            {"type": "text", "text": "Describe this video."},
-        ],
-    }
-]
-
-# for video input, we can further control the fps or num_frames. \
-# defaultly, fps is set to 2
-
-# set fps = 4
-inputs = processor.apply_chat_template(
-    messages,
-    tokenize=True,
-    add_generation_prompt=True,
-    return_dict=True,
-    return_tensors="pt",
-    fps=4
-)
-inputs = inputs.to(model.device)
-
-# set num_frames = 128 and overwrite the fps to None!
-# inputs = processor.apply_chat_template(
-#     messages,
-#     tokenize=True,
-#     add_generation_prompt=True,
-#     return_dict=True,
-#     return_tensors="pt",
-#     num_frames=128,
-#     fps=None,
-# )
-# inputs = inputs.to(model.device)
-
-# Inference: Generation of the output
-generated_ids = model.generate(**inputs, max_new_tokens=128)
-generated_ids_trimmed = [
-    out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-]
-output_text = processor.batch_decode(
-    generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-)
-print(output_text)
-```
-</details>
-
-### New `qwen-vl-utils` Usage
-
-With the latest `qwen-vl-utils` toolkit (backward compatible with Qwen2.5-VL), you can control pixel constraints per visual input.
+All modules require a running vLLM server with the Qwen3-VL model:
 
 ```bash
-pip install qwen-vl-utils==0.0.14
-# It's highly recommended to use `[decord]` feature for faster video loading.
-# pip install qwen-vl-utils[decord]
+vllm serve Qwen/Qwen3-VL-235B-A22B-Instruct --tensor-parallel-size 8
 ```
 
-Compared to previous version, the new `qwen-vl-utils` introduces:
+### Environment Variables (Optional)
 
-- "image_patch_size": `14` for Qwen2.5-VL and `16` for Qwen3-VL. Default set to `14`.
+Set these to avoid passing paths on every invocation:
 
-- "return_video_metadata"(Qwen3-VL only): Due to the new video processor, if True, each video returns as (video_tensor, video_metadata). Default set to `False`.
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `NUSCENES_PKL_PATH` | Path to nuScenes pickle file | `/data/nuscenes/nuscenes2d_ego_temporal_infos_val.pkl` |
+| `QUESTION_BANK_PATH` | Path to question bank JSON | `/data/qa_dataset/question_bank.json` |
 
-```python
-# for Qwen2.5VL, you can simply call 
-images, videos, video_kwargs = process_vision_info(messages, return_video_kwargs=True)
+If not set, the modules fall back to looking for the files in the current working directory.
 
-# For Qwen3VL series, you should call 
-images, videos, video_kwargs = process_vision_info(messages, image_patch_size=16, return_video_kwargs=True, return_video_metadata=True)
-```
+### Working Directory
 
-📌 Note: Since `qwen-vl-utils` already resizes images/videos, pass `do_resize=False` to the processor to avoid duplicate resizing.
-
-<details>
-<summary>Process Images</summary>
-
-For input images, we support local files, base64, and URLs. 
-
-```python
-# You can directly insert a local file path, a URL, or a base64-encoded image into the position where you want in the text.
-## Local file path
-messages = [
-    {
-        "role": "user",
-        "content": [
-            {"type": "image", "image": "file:///path/to/your/image.jpg"},
-            {"type": "text", "text": "Describe this image."},
-        ],
-    }
-]
-## Image URL
-messages = [
-    {
-        "role": "user",
-        "content": [
-            {"type": "image", "image": "http://path/to/your/image.jpg"},
-            {"type": "text", "text": "Describe this image."},
-        ],
-    }
-]
-## Base64 encoded image
-messages = [
-    {
-        "role": "user",
-        "content": [
-            {"type": "image", "image": "data:image;base64,/9j/..."},
-            {"type": "text", "text": "Describe this image."},
-        ],
-    }
-]
-```
-
-We provide two methods for fine-grained control over the image size input to the model:
-
-- Specify exact dimensions: Directly set resized_height and resized_width. These values will be rounded to the nearest multiple of 32 (32 for Qwen3VL, 28 for Qwen2.5VL).
-
-- Define min_pixels and max_pixels: Images will be resized to maintain their aspect ratio within the range of min_pixels and max_pixels
-
-```python
-from transformers import AutoModelForImageTextToText, AutoProcessor
-from qwen_vl_utils import process_vision_info
-
-model = AutoModelForImageTextToText.from_pretrained(
-    "Qwen/Qwen3-VL-235B-A22B-Instruct", dtype="auto", device_map="auto"
-)
-
-processor = AutoProcessor.from_pretrained("Qwen/Qwen3-VL-235B-A22B-Instruct")
-
-# resized_height and resized_width
-messages = [
-    {
-        "role": "user",
-        "content": [
-            {
-                "type": "image",
-                "image": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg",
-                "resized_height": 280,
-                "resized_width": 420,
-            },
-            {"type": "text", "text": "Describe this image."},
-        ],
-    }
-]
-
-# min_pixels and max_pixels
-messages = [
-    {
-        "role": "user",
-        "content": [
-            {
-                "type": "image",
-                "image": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg",
-                "min_pixels": 50176,
-                "max_pixels": 50176,
-
-            },
-            {"type": "text", "text": "Describe this image."},
-        ],
-    }
-]
-
-# Preparation for inference with qwen-vl-utils
-text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-images, videos = process_vision_info(messages, image_patch_size=16)
-
-# since qwen-vl-utils has resize the images/videos, \
-# we should pass do_resize=False to avoid duplicate operation in processor!
-inputs = processor(text=text, images=images, videos=videos, do_resize=False, return_tensors="pt")
-inputs = inputs.to(model.device)
-
-# Inference: Generation of the output
-generated_ids = model.generate(**inputs, max_new_tokens=128)
-generated_ids_trimmed = [
-    out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-]
-output_text = processor.batch_decode(
-    generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-)
-print(output_text)
-```
-
-</details>
-
-<details>
-<summary>Process Videos</summary>
-
-For input videos, we support images lists, local path and url. 
-
-```python
-# Messages containing a images list as a video and a text query
-messages = [
-    {
-        "role": "user",
-        "content": [
-            {
-                "type": "video",
-                "video": [
-                    "file:///path/to/frame1.jpg",
-                    "file:///path/to/frame2.jpg",
-                    "file:///path/to/frame3.jpg",
-                    "file:///path/to/frame4.jpg",
-                ],
-                'sample_fps':'1', # sample_fps: frame sampling rate (frames per second), used to determine timestamps for each frame
-            },
-            {"type": "text", "text": "Describe this video."},
-        ],
-    }
-]
-
-# Messages containing a local video path and a text query
-messages = [
-    {
-        "role": "user",
-        "content": [
-            {
-                "type": "video",
-                "video": "file:///path/to/video1.mp4",
-                "max_pixels": 360 * 420,
-                "fps": 1.0,
-            },
-            {"type": "text", "text": "Describe this video."},
-        ],
-    }
-]
-
-# Messages containing a video url and a text query
-messages = [
-    {
-        "role": "user",
-        "content": [
-            {
-                "type": "video",
-                "video": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/space_woaudio.mp4",
-                "min_pixels": 4 * 32 * 32,
-                "max_pixels": 256 * 32 * 32,
-                "total_pixels": 20480 * 32 * 32,
-            },
-            {"type": "text", "text": "Describe this video."},
-        ],
-    }
-]
-
-```
-
-We recommend setting appropriate values for the `min_pixels` and `max_pixels` parameters based on available GPU memory and the specific application scenario to restrict the resolution of individual frames in the video. 
-
-Alternatively, you can use the `total_pixels` parameter to limit the total number of tokens in the video (it is recommended to set this value below 24576 * 32 * 32 to avoid excessively long input sequences). For more details on parameter usage and processing logic, please refer to the `fetch_video` function in `qwen_vl_utils/vision_process.py`.
-
-```python
-from transformers import AutoModelForImageTextToText, AutoProcessor
-from qwen_vl_utils import process_vision_info
-
-model = AutoModelForImageTextToText.from_pretrained(
-    "Qwen/Qwen3-VL-235B-A22B-Instruct", dtype="auto", device_map="auto"
-)
-
-processor = AutoProcessor.from_pretrained("Qwen/Qwen3-VL-235B-A22B-Instruct")
-
-messages = [
-    {
-        "role": "user",
-        "content": [
-            {
-                "type": "video",
-                "video": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/space_woaudio.mp4",
-                "min_pixels": 4 * 32 * 32,
-                "max_pixels": 256 * 32 * 32,
-                "total_pixels": 20480 * 32 * 32,
-            },
-            {"type": "text", "text": "Describe this video."},
-        ],
-    }
-]
-
-text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-images, videos, video_kwargs = process_vision_info(messages, image_patch_size=16, return_video_kwargs=True, return_video_metadata=True)
-
-# split the videos and according metadatas
-if videos is not None:
-    videos, video_metadatas = zip(*videos)
-    videos, video_metadatas = list(videos), list(video_metadatas)
-else:
-    video_metadatas = None
-
-# since qwen-vl-utils has resize the images/videos, \
-# we should pass do_resize=False to avoid duplicate operation in processor!
-inputs = processor(text=text, images=images, videos=videos, video_metadata=video_metadatas, return_tensors="pt", do_resize=False, **video_kwargs)
-inputs = inputs.to(model.device)
-
-# Inference: Generation of the output
-generated_ids = model.generate(**inputs, max_new_tokens=128)
-generated_ids_trimmed = [
-    out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-]
-output_text = processor.batch_decode(
-    generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-)
-print(output_text)
-```
-
-</details>
-
-<details>
-<summary>Video Backends and URL Compatibility</summary>
-
-Currently, `qwen-vl-utils` supports three video decoding backends: `torchvision`, `decord`, and `torchcodec`. While `decord` and `torchcodec` generally offer significantly faster decoding speeds compared to `torchvision`, we recommend using `torchcodec`. This is because `decord` has known issues, such as decoding hangs, and its project is no longer actively maintained.
-
-- For `decord`, if you are not using Linux, you might not be able to install `decord` from PyPI. In that case, you can use `pip install qwen-vl-utils` which will fall back to using torchvision for video processing. However, you can still [install decord from source](https://github.com/dmlc/decord?tab=readme-ov-file#install-from-source) to get decord used when loading video.
-
-- To use `torchcodec` as the backend for video decoding, follow the installation instructions provided in the official [torchcodec repository](https://github.com/pytorch/torchcodec/tree/main?tab=readme-ov-file#installing-torchcodec) and install it manually. Note that `torchcodec` depends on FFmpeg for decoding functionality.
-
-Video URL compatibility is primarily determined by the version of the third-party library being used. For more details, refer to the table below. If you prefer not to use the default backend, you can switch it by setting `FORCE_QWENVL_VIDEO_READER` to `torchvision`, `decord`, or `torchcodec`.
-
-| Backend     | HTTP | HTTPS |
-|-------------|------|-------|
-| torchvision >= 0.19.0 | ✅  | ✅   |
-| torchvision < 0.19.0  | ❌  | ❌   |
-| decord      | ✅  | ❌   |
-| torchcodec  | ✅  | ✅   |
-
-</details>
-
-
-### More Usage Tips
-
-#### Add ids for Multiple Visual Inputs
-By default, images and video content are directly included in the conversation. When handling multiple images, it's helpful to add labels to the images and videos for better reference. Users can control this behavior with the following settings:
-<details>
-<summary>Add vision ids</summary>
-
-```python
-conversation = [
-    {
-        "role": "user",
-        "content": [{"type": "image"}, {"type": "text", "text": "Hello, how are you?"}],
-    },
-    {
-        "role": "assistant",
-        "content": "I'm doing well, thank you for asking. How can I assist you today?",
-    },
-    {
-        "role": "user",
-        "content": [
-            {"type": "text", "text": "Can you describe these images and video?"},
-            {"type": "image"},
-            {"type": "image"},
-            {"type": "video"},
-            {"type": "text", "text": "These are from my vacation."},
-        ],
-    },
-    {
-        "role": "assistant",
-        "content": "I'd be happy to describe the images and video for you. Could you please provide more context about your vacation?",
-    },
-    {
-        "role": "user",
-        "content": "It was a trip to the mountains. Can you see the details in the images and video?",
-    },
-]
-
-# default:
-prompt_without_id = processor.apply_chat_template(
-    conversation, add_generation_prompt=True
-)
-# Excepted output: '<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>Hello, how are you?<|im_end|>\n<|im_start|>assistant\nI'm doing well, thank you for asking. How can I assist you today?<|im_end|>\n<|im_start|>user\nCan you describe these images and video?<|vision_start|><|image_pad|><|vision_end|><|vision_start|><|image_pad|><|vision_end|><|vision_start|><|video_pad|><|vision_end|>These are from my vacation.<|im_end|>\n<|im_start|>assistant\nI'd be happy to describe the images and video for you. Could you please provide more context about your vacation?<|im_end|>\n<|im_start|>user\nIt was a trip to the mountains. Can you see the details in the images and video?<|im_end|>\n<|im_start|>assistant\n'
-
-
-# add ids
-prompt_with_id = processor.apply_chat_template(
-    conversation, add_generation_prompt=True, add_vision_id=True
-)
-# Excepted output: '<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\nPicture 1: <|vision_start|><|image_pad|><|vision_end|>Hello, how are you?<|im_end|>\n<|im_start|>assistant\nI'm doing well, thank you for asking. How can I assist you today?<|im_end|>\n<|im_start|>user\nCan you describe these images and video?Picture 2: <|vision_start|><|image_pad|><|vision_end|>Picture 3: <|vision_start|><|image_pad|><|vision_end|>Video 1: <|vision_start|><|video_pad|><|vision_end|>These are from my vacation.<|im_end|>\n<|im_start|>assistant\nI'd be happy to describe the images and video for you. Could you please provide more context about your vacation?<|im_end|>\n<|im_start|>user\nIt was a trip to the mountains. Can you see the details in the images and video?<|im_end|>\n<|im_start|>assistant\n'
-```
-</details>
-
-#### Flash-Attention 2 to speed up generation
-
-First, make sure to install the latest version of Flash Attention 2:
+All commands should be run from the `qwen-drive/` root directory:
 
 ```bash
-pip install -U flash-attn --no-build-isolation
+cd /path/to/qwen-drive
 ```
 
-Also, you should have a hardware that is compatible with Flash-Attention 2. Read more about it in the official documentation of the [flash attention repository](https://github.com/Dao-AILab/flash-attention). FlashAttention-2 can only be used when a model is loaded in `torch.float16` or `torch.bfloat16`.
+---
 
-To load and run a model using Flash Attention-2, simply add `attn_implementation="flash_attention_2"` when loading the model as follows:
+## Stage 1A: Risk Assessment
 
-```python
-import torch
-from transformers import AutoModelForImageTextToText
+Analyzes driving risks, hazards, and time-to-collision (TTC) for each nuScenes sample using 6-view egocentric camera images and 3D object annotations.
 
-model = AutoModelForImageTextToText.from_pretrained(
-    "Qwen/Qwen3-VL-235B-A22B-Instruct", 
-    torch_dtype=torch.bfloat16, 
-    attn_implementation="flash_attention_2",
-)
+### How to Run
+
+```bash
+# Via shell script (recommended defaults)
+bash nuscenes_pipeline/scripts/run_risk_assessment.sh [START_IDX] [END_IDX] [NUM_WORKERS]
+
+# Via Python module
+python -m nuscenes_pipeline.modules.risk_assessment \
+    --start_idx 0 --end_idx 6018 --num_workers 8 \
+    --resize_factor 2 --to_global --3dod --proj2img \
+    --filter_length 50 --rear_filter 20 \
+    --max_new_tokens 4096 \
+    --results_dir risk_assessment_results \
+    --question "Analyze risks and hazards following these categories: Risk Categories: 1. Static Hazards: Parked vehicles, road infrastructure, visibility obstructions 2. Dynamic Risks: Potential pedestrian/vehicle emergence zones, blind spots 3. Environmental Factors: Weather, lighting, road geometry 4. Situational Awareness: Areas requiring increased vigilance Output Format: 1. Immediate Risks (requires immediate attention) 2. Potential Risks (monitor closely) 3. Recommended Actions (specific driving advice) 4. Overall Risk Level(Low/Moderate/High with brief justification) Instructions: - Analyze the recommended actions in the overall context of ego-centric surrounding scenes. - Double-check all directions of images before finalizing. - Prioritize by severity and likelihood. - Focus on actionable insight. - For the assessment of the Overall Risk Level, compute the collision risk using the provided collision-risk formula by substituting the 3D information and velocity of all objects and the ego vehicle, and present the evaluated result accordingly."
 ```
 
-#### Processing Long Texts
+### Arguments
 
-The current `config.json` is set for context length up to 256K tokens.
-To handle extensive inputs exceeding 256K tokens, we utilize [YaRN](https://arxiv.org/abs/2309.00071), a technique for enhancing model length extrapolation, ensuring optimal performance on lengthy texts.
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--model_name` | str | `Qwen/Qwen3-VL-235B-A22B-Instruct` | Model name served by vLLM |
+| `--api_base` | str | `http://localhost:8000/v1` | vLLM API endpoint URL |
+| `--api_key` | str | `EMPTY` | API key for the vLLM server |
+| `--pkl_path` | str | env `NUSCENES_PKL_PATH` | Path to nuScenes pickle file |
+| `--start_idx` | int | `0` | Starting sample index (inclusive) |
+| `--end_idx` | int | `6018` | Ending sample index (inclusive) |
+| `--question` | str | **required** | Risk assessment question prompt |
+| `--resize_factor` | int | `4` | Image downscale factor. Use `2` for production runs (1/2 of original 1600x900) |
+| `--max_new_tokens` | int | `4096` | Maximum tokens the model generates per sample |
+| `--num_workers` | int | `8` | Number of parallel multiprocessing workers |
+| `--to_global` | flag | `False` | Use global ENU coordinates instead of ego-relative FLU coordinates |
+| `--3dod` | flag | `False` | Include 3D object detection ground truth (bounding boxes, velocities, TTC) in the prompt |
+| `--filter_length` | float | `20.0` | Maximum distance (meters) from ego vehicle to include 3D objects |
+| `--rear_filter` | float | `None` | Maximum distance (meters) for non-vehicle objects behind the ego vehicle. Vehicles behind ego are always kept regardless of this filter |
+| `--proj2img` | flag | `False` | Project 3D object positions onto image pixel coordinates in the prompt |
+| `--results_dir` | str | `risk_assessment_results` | Directory to save per-sample result JSONs |
+| `--log_dir` | str | `risk_assessment_logs` | Directory for execution logs and failed-index tracking |
 
-For supported frameworks (currently transformers and vLLM), you could modify `max_position_embeddings` and `rope_scaling` in `config.json` to enable YaRN:
+### Input
 
+| Input | Description |
+|-------|-------------|
+| nuScenes pickle file (`--pkl_path`) | Pre-processed nuScenes validation set containing 6,019 samples with camera images, 3D annotations, ego poses, and velocities |
+| 6-view camera images | Loaded from paths stored in the pickle file. Camera order: Front-Left, Front, Front-Right, Rear-Left, Rear, Rear-Right. Rear cameras are horizontally flipped for egocentric consistency |
+
+### Output
+
+Per-sample JSON files saved to `{results_dir}/`:
+
+**Filename pattern:** `{idx:04d}_{scene_token}_{sample_token}_single_frame.json`
+
+**Contents:**
+- `system_prompt`: The system prompt sent to the model
+- `user_question`: The user question with scene context (ego state, 3D objects, TTC)
+- `response`: Model's risk assessment response
+- `inference_time`: Time taken for the API call
+- `sample_metadata`: Sample index, scene token, timestamp
+
+---
+
+## Stage 1B: Traffic Analysis
+
+Identifies all traffic signals visible in the 6-view camera images and determines their states (red, yellow, green), orientation, and relevance to the ego vehicle's lane.
+
+### How to Run
+
+```bash
+# Via shell script (recommended defaults)
+bash nuscenes_pipeline/scripts/run_traffic_analysis.sh [START_IDX] [END_IDX] [NUM_WORKERS]
+
+# Via Python module
+python -m nuscenes_pipeline.modules.traffic_analysis \
+    --start_idx 0 --end_idx 6018 --num_workers 8 \
+    --resize_factor 1 --to_global \
+    --max_new_tokens 4096 \
+    --results_dir traffic_analysis_results \
+    --question "Analyze the traffic signals visible in the images. Identify which signal governs the ego vehicle's driving status and lane, then report its current state."
 ```
+
+### Arguments
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--model_name` | str | `Qwen/Qwen3-VL-235B-A22B-Instruct` | Model name served by vLLM |
+| `--api_base` | str | `http://localhost:8000/v1` | vLLM API endpoint URL |
+| `--api_key` | str | `EMPTY` | API key for the vLLM server |
+| `--pkl_path` | str | env `NUSCENES_PKL_PATH` | Path to nuScenes pickle file |
+| `--sample_indices` | int+ | `None` | Specific sample indices to analyze (e.g., `--sample_indices 0 10 20`) |
+| `--start_idx` | int | `None` | Start index for range-based processing |
+| `--end_idx` | int | `None` | End index for range-based processing |
+| `--question` | str | (built-in default) | Custom traffic analysis question |
+| `--resize_factor` | int | `4` | Image downscale factor. Use `1` for production runs (full 1600x900 resolution for small signal detection) |
+| `--max_new_tokens` | int | `4096` | Maximum tokens the model generates per sample |
+| `--num_workers` | int | `8` | Number of parallel multiprocessing workers |
+| `--to_global` | flag | `False` | Use global ENU coordinates in the prompt |
+| `--visualize` | flag | `False` | Generate visualization images alongside results |
+| `--viz_output_dir` | str | `traffic_visualizations` | Directory for visualization output |
+| `--results_dir` | str | `traffic_analysis_results` | Directory to save per-sample result JSONs |
+
+**Note on sample selection:** Use either `--sample_indices` for specific samples OR `--start_idx`/`--end_idx` for a range. If only `--start_idx` is given, all samples from that index to the end of the dataset are processed.
+
+### Input
+
+| Input | Description |
+|-------|-------------|
+| nuScenes pickle file (`--pkl_path`) | Same pickle file as Stage 1A |
+| 6-view camera images | Same camera images. Traffic analysis uses **full resolution** (`--resize_factor 1`) for better small-signal detection |
+
+### Output
+
+Per-sample JSON files saved to `{results_dir}/`:
+
+**Filename pattern:** `{idx:04d}_{scene_token}_{sample_token}_traffic_v8.json`
+
+**Contents:**
+- `system_prompt`: The system prompt with camera heading information
+- `user_question`: The traffic analysis question
+- `response`: Model's traffic signal analysis (signal states, orientations, lane governance)
+- `inference_time`: Time taken for the API call
+- `sample_metadata`: Sample index, scene token, camera heading table
+
+---
+
+## Stage 2: Question Selector
+
+Selects applicable question templates from a question bank for each nuScenes sample. For each template, the module validates whether the template's placeholders can be grounded in the current scene using the 6-view images, 3D object data, and prior analysis results from Stages 1A and 1B.
+
+### How to Run
+
+```bash
+# Via shell script (recommended defaults)
+bash nuscenes_pipeline/scripts/run_question_selector.sh [START_IDX] [END_IDX] [CATEGORY] [NUM_WORKERS]
+
+# Via Python module
+python -m nuscenes_pipeline.modules.question_selector \
+    --start_idx 0 --end_idx 6018 --category all --num_workers 8 \
+    --resize_factor 2 --filter_distance 50 --rear_filter 20 \
+    --batch_size 5 --max_new_tokens 1024 \
+    --risk_results_dir risk_assessment_results \
+    --traffic_results_dir traffic_analysis_results \
+    --output_dir qa_outputs
+```
+
+### Arguments
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--model_name` | str | `Qwen/Qwen3-VL-235B-A22B-Instruct` | Model name served by vLLM |
+| `--api_base` | str | `http://localhost:8000/v1` | vLLM API endpoint URL |
+| `--api_key` | str | `EMPTY` | API key for the vLLM server |
+| `--pkl_path` | str | env `NUSCENES_PKL_PATH` | Path to nuScenes pickle file |
+| `--question_bank` | str | env `QUESTION_BANK_PATH` | Path to question bank JSON containing template definitions across 10 categories |
+| `--vqa_results_dir` | str | `vqa_results` | Directory containing prior VQA result files (used for context building) |
+| `--output_dir` | str | `qa_outputs` | Output directory for generated results |
+| `--risk_results_dir` | str | `risk_assessment_results` | Directory containing Stage 1A risk assessment JSONs. Used as prior context for the `Dynamic_Agents_and_Risk_Assessment` category |
+| `--traffic_results_dir` | str | `traffic_analysis_results` | Directory containing Stage 1B traffic analysis JSONs. Used as prior context for the `Traffic_Signs_and_Signals` category |
+| `--start_idx` | int | `0` | Starting sample index (inclusive) |
+| `--end_idx` | int | `6018` | Ending sample index (inclusive) |
+| `--category` | str | **required** | Question category to process. One of the 10 categories listed below, or `all` to process all categories |
+| `--filter_distance` | float | `20.0` | Maximum distance (meters) from ego to include 3D objects in scene analysis |
+| `--rear_filter` | float | `None` | Maximum distance (meters) for non-vehicle objects behind ego |
+| `--batch_size` | int | `5` | Number of templates per VLM validation batch. Smaller values reduce GPU OOM risk |
+| `--resize_factor` | int | `2` | Image downscale factor (1/n of original 1600x900) |
+| `--max_new_tokens` | int | `1024` | Maximum tokens the model generates per validation batch |
+| `--num_workers` | int | `8` | Number of parallel multiprocessing workers |
+| `--log_dir` | str | `continuous_qa_logs` | Directory for execution logs |
+
+**Valid categories for `--category`:**
+
+| Category | Description |
+|----------|-------------|
+| `Observation` | Object presence and counting |
+| `Identification` | Object type classification |
+| `Attributes_and_States` | Object attributes (color, state, damage) |
+| `Spatial_Relationships_and_Occlusion` | Relative positions and occlusion |
+| `Traffic_Signs_and_Signals` | Traffic signal/sign identification |
+| `Road_Markings_and_Lane_Configuration` | Lane markings and road layout |
+| `Dynamic_Agents_and_Risk_Assessment` | Moving agents and collision risk |
+| `Right_of_Way_and_Planning` | Driving decisions and right-of-way |
+| `Environmental_and_Sensor_Conditions` | Weather, lighting, sensor quality |
+| `Causal_and_Hypothetical_Reasoning` | "What if" and cause-effect reasoning |
+| `all` | Process all 10 categories sequentially |
+
+### Input
+
+| Input | Description |
+|-------|-------------|
+| nuScenes pickle file (`--pkl_path`) | Same pickle file as previous stages |
+| Question bank (`--question_bank`) | JSON file containing question templates organized by 10 categories. Each template has placeholder tags with candidate values and expected answer types |
+| Stage 1A results (`--risk_results_dir`) | Risk assessment JSONs from Stage 1A. Provides prior context for risk-related categories |
+| Stage 1B results (`--traffic_results_dir`) | Traffic analysis JSONs from Stage 1B. Provides prior context for traffic signal categories |
+
+**Question bank structure:**
+```json
 {
-    "max_position_embeddings": 1000000,
-	...,
-    "rope_scaling": {
-        "rope_type": "yarn",
-        "mrope_section": [
-            24,
-            20,
-            20
-        ],
-        "mrope_interleaved": true,
-        "factor": 3.0,
-        "original_max_position_embeddings": 262144
-    },
-    ...
-}
-```
-
-When using vLLM for serving, you can also enable YaRN by adding the additional arguments `--rope-scaling` and `--max-model-len`.
-
-```
-vllm serve Qwen/Qwen3-VL-235B-A22B-Instruct --rope-scaling '{"rope_type":"yarn","factor":3.0,"original_max_position_embeddings": 262144,"mrope_section":[24,20,20],"mrope_interleaved": true}' --max-model-len 1000000
-```
-
-> Because Interleaved-MRoPE’s position IDs grow more slowly than vanilla RoPE, use a **smaller scaling factor**. For example, to support 1M context with 256K context length, set factor=2 or 3 — not 4.
-
-### Try Qwen3-VL-235B-A22 with API!
-
-To explore Qwen3-VL-235B-A22, a more fascinating multimodal model, we encourage you to test our cutting-edge API service. Let's start the exciting journey right now!
-```python
-from openai import OpenAI
-
-# set your DASHSCOPE_API_KEY here
-DASHSCOPE_API_KEY = ""
-
-client = OpenAI(
-    api_key=DASHSCOPE_API_KEY,
-    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-)
-
-completion = client.chat.completions.create(
-    model="qwen3-vl-235b-a22b-instruct",
-    messages=[{"role": "user", "content": [
-        {"type": "image_url",
-         "image_url": {"url": "https://dashscope.oss-cn-beijing.aliyuncs.com/images/dog_and_girl.jpeg"}},
-        {"type": "text", "text": "这是什么"},
-    ]}]
-)
-print(completion.model_dump_json())
-```
-
-For more usage, please refer to the tutorial at [aliyun](https://help.aliyun.com/zh/model-studio/developer-reference/qwen-vl-api).
-
-
-### Web UI Example
-
-In this section, we provide instructions for users to build a web-based user interface (UI) demo. This UI demo allows users to interact with a predefined model or application through a web browser. Follow the steps below to get started.
-
-Install the required dependencies by running the following command:
-
-```bash
-pip install -r requirements_web_demo.txt
-```
-
-
-Launch a browser-based UI to interact with the model:
-
-```bash
-python web_demo_mm.py -c /your/path/to/qwen3vl/weight
-```
-
-After running the command, you’ll see a link generated in the terminal similar to this:
-
-```
-Running on local: http://127.0.0.1:7860/
-```
-
-Open the link in your browser to interact with the model — try text, images, or other features.  For a quick start, you can also use our pre-built Docker image:
-
-```
-cd docker && bash run_web_demo.sh -c /your/path/to/qwen3vl/weight --port 8881
-```
-
-
-
-## Deployment
-
-We recommend using vLLM for fast Qwen3-VL deployment and inference. You need to install `vllm>=0.11.0` to enable Qwen3-VL support. You can also use our [official docker image](#-docker).
-
-Please check [vLLM official documentation](https://docs.vllm.ai/en/latest/serving/multimodal_inputs.html) for more details about online serving and offline inference for multimodal models.
-
-### Installation
-```bash
-pip install accelerate
-pip install qwen-vl-utils==0.0.14
-# Install the latest version of vLLM 'vllm>=0.11.0'
-uv pip install -U vllm
-```
-
-### Online Serving
-You can start either a vLLM or SGLang server to serve LLMs efficiently, and then access it using an OpenAI-style API.
-
-The following launch command is applicable to H100/H200; for more efficient deployment or deployment on other GPUs, please refer to the [vLLM community guide](https://docs.vllm.ai/projects/recipes/en/latest/Qwen/Qwen3-VL.html).
-
-* vLLM server
-```shell
-# Efficient inference with FP8 checkpoint
-# Requires NVIDIA H100+ and CUDA 12+
-vllm serve Qwen/Qwen3-VL-235B-A22B-Instruct-FP8 \
-  --tensor-parallel-size 8 \
-  --mm-encoder-tp-mode data \
-  --enable-expert-parallel \
-  --async-scheduling \
-  --media-io-kwargs '{"video": {"num_frames": -1}}' \
-  --host 0.0.0.0 \
-  --port 22002
-```
-* SGLang server
-```
-python -m sglang.launch_server \
-   --model-path Qwen/Qwen3-VL-235B-A22B-Instruct \
-   --host 0.0.0.0 \
-   --port 22002 \
-   --tp 4
-```
-* Image Request Example
-```python
-import time
-from openai import OpenAI
-
-client = OpenAI(
-    api_key="EMPTY",
-    base_url="http://127.0.0.1:22002/v1",
-    timeout=3600
-)
-
-messages = [
+  "categories": [
     {
-        "role": "user",
-        "content": [
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": "https://ofasys-multimodal-wlcb-3-toshanghai.oss-accelerate.aliyuncs.com/wpf272043/keepme/image/receipt.png"
-                }
-            },
-            {
-                "type": "text",
-                "text": "Read all the text in the image."
-            }
-        ]
-    }
-]
-
-start = time.time()
-response = client.chat.completions.create(
-    model="Qwen/Qwen3-VL-235B-A22B-Instruct-FP8",
-    messages=messages,
-    max_tokens=2048
-)
-print(f"Response costs: {time.time() - start:.2f}s")
-print(f"Generated text: {response.choices[0].message.content}")
-```
-* Video Request Example
-```python
-import time
-from openai import OpenAI
-
-client = OpenAI(
-    api_key="EMPTY",
-    base_url="http://127.0.0.1:22002/v1",
-    timeout=3600
-)
-
-messages = [
-    {
-        "role": "user",
-        "content": [
-            {
-                "type": "video_url",
-                "video_url": {
-                    "url": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/space_woaudio.mp4"
-                }
-            },
-            {
-                "type": "text",
-                "text": "How long is this video?"
-            }
-        ]
-    }
-]
-
-start = time.time()
-
-# When vLLM is launched with `--media-io-kwargs '{"video": {"num_frames": -1}}'`,
-# video frame sampling can be configured via `extra_body` (e.g., by setting `fps`).
-# This feature is currently supported only in vLLM.
-#
-# By default, `fps=2` and `do_sample_frames=True`.
-# With `do_sample_frames=True`, you can customize the `fps` value to set your desired video sampling rate.
-response = client.chat.completions.create(
-    model="Qwen/Qwen3-VL-235B-A22B-Instruct-FP8",
-    messages=messages,
-    max_tokens=2048,
-    extra_body={"mm_processor_kwargs": {"fps": 2, "do_sample_frames": True}}
-)
-
-print(f"Response costs: {time.time() - start:.2f}s")
-print(f"Generated text: {response.choices[0].message.content}")
-```
-
-### Offline Inference
-
-You can also use vLLM or SGLang to inference Qwen3-VL locally:
-
-* vLLM Examples
-``` python
-# -*- coding: utf-8 -*-
-import torch
-from qwen_vl_utils import process_vision_info
-from transformers import AutoProcessor
-from vllm import LLM, SamplingParams
-
-import os
-os.environ['VLLM_WORKER_MULTIPROC_METHOD'] = 'spawn'
-
-def prepare_inputs_for_vllm(messages, processor):
-    text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    # qwen_vl_utils 0.0.14+ reqired
-    image_inputs, video_inputs, video_kwargs = process_vision_info(
-        messages,
-        image_patch_size=processor.image_processor.patch_size,
-        return_video_kwargs=True,
-        return_video_metadata=True
-    )
-    print(f"video_kwargs: {video_kwargs}")
-
-    mm_data = {}
-    if image_inputs is not None:
-        mm_data['image'] = image_inputs
-    if video_inputs is not None:
-        mm_data['video'] = video_inputs
-
-    return {
-        'prompt': text,
-        'multi_modal_data': mm_data,
-        'mm_processor_kwargs': video_kwargs
-    }
-
-
-if __name__ == '__main__':
-    # messages = [
-    #     {
-    #         "role": "user",
-    #         "content": [
-    #             {
-    #                 "type": "video",
-    #                 "video": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen2-VL/space_woaudio.mp4",
-    #             },
-    #             {"type": "text", "text": "这段视频有多长"},
-    #         ],
-    #     }
-    # ]
-
-    messages = [
+      "category": "Observation",
+      "description": "...",
+      "templates": [
         {
-            "role": "user",
-            "content": [
-              {
-                  "type": "image",
-                  "image": "https://ofasys-multimodal-wlcb-3-toshanghai.oss-accelerate.aliyuncs.com/wpf272043/keepme/image/receipt.png",
-              },
-              {"type": "text", "text": "Read all the text in the image."},
-            ],
+          "template": "Are there any <object> <preposition> the <place>?",
+          "placeholders": {
+            "object": ["pedestrians", "vehicles", ...],
+            "place": ["lane", "roadway", ...],
+            "preposition": ["in", "on"]
+          },
+          "answer_type": "y_or_n",
+          "question_type": "observation"
         }
-    ]
-
-    # TODO: change to your own checkpoint path
-    checkpoint_path = "Qwen/Qwen3-VL-235B-A22B-Instruct-FP8"
-    processor = AutoProcessor.from_pretrained(checkpoint_path)
-    inputs = [prepare_inputs_for_vllm(message, processor) for message in [messages]]
-
-    llm = LLM(
-        model=checkpoint_path,
-        mm_encoder_tp_mode="data",
-        enable_expert_parallel=True,
-        tensor_parallel_size=torch.cuda.device_count(),
-        seed=0
-    )
-
-    sampling_params = SamplingParams(
-        temperature=0,
-        max_tokens=1024,
-        top_k=-1,
-        stop_token_ids=[],
-    )
-
-    for i, input_ in enumerate(inputs):
-        print()
-        print('=' * 40)
-        print(f"Inputs[{i}]: {input_['prompt']=!r}")
-    print('\n' + '>' * 40)
-
-    outputs = llm.generate(inputs, sampling_params=sampling_params)
-    for i, output in enumerate(outputs):
-        generated_text = output.outputs[0].text
-        print()
-        print('=' * 40)
-        print(f"Generated text: {generated_text!r}")
+      ]
+    }
+  ]
+}
 ```
 
-* SGLang Examples
+### Output
+
+Three JSON files per sample, saved to `{output_dir}/`:
+
+| File | Description |
+|------|-------------|
+| `sample_{idx}_qa_summary.json` | Category statistics: how many templates were tested vs. applicable per category |
+| `sample_{idx}_applicable_questions.json` | List of applicable templates with verified placeholder values grounded in the scene |
+| `sample_{idx}_inference_detailed.json` | Full debug info including raw VLM responses for each validation batch |
+
+Log files saved to `{log_dir}/`:
+- `continuous_qa_vllm_{timestamp}.log` — execution summary
+- `failed_qa_indices_{timestamp}.txt` — indices that failed (for retry)
+
+---
+
+## Stage 3: Answer Generator
+
+Takes question selector outputs (Stage 2), classifies each template's placeholders as ENTITY (grounded to specific objects) or LEXICAL (vocabulary choices), pre-instantiates concrete question-answer pairs, and uses the VLM to generate positive answers with contrastive variations for training data diversity.
+
+### How to Run
+
+```bash
+# Via shell script (recommended defaults)
+bash nuscenes_pipeline/scripts/run_answer_generator.sh [START_IDX] [END_IDX] [CATEGORY] [NUM_WORKERS]
+
+# Via Python module
+python -m nuscenes_pipeline.modules.answer_generator \
+    --start_idx 0 --end_idx 6018 --category all --num_workers 8 \
+    --resize_factor 2 --filter_distance 50 --rear_filter 20 \
+    --max_new_tokens 16384 --max_pairs 3 \
+    --stage1_dir qa_outputs_stage1 \
+    --output_dir qa_outputs_stage2
+```
+
+### Arguments
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--model_name` | str | `Qwen/Qwen3-VL-235B-A22B-Instruct` | Model name served by vLLM |
+| `--api_base` | str | `http://localhost:8000/v1` | vLLM API endpoint URL |
+| `--api_key` | str | `EMPTY` | API key for the vLLM server |
+| `--pkl_path` | str | env `NUSCENES_PKL_PATH` | Path to nuScenes pickle file |
+| `--question_bank` | str | env `QUESTION_BANK_PATH` | Path to question bank JSON (needed for original placeholder definitions and expected answer types) |
+| `--stage1_dir` | str | `qa_outputs_stage1` | Stage 2 (question selector) output directory. Contains the applicable question files per sample |
+| `--output_dir` | str | `qa_outputs_stage2` | Output directory for generated QA pairs |
+| `--start_idx` | int | `0` | Starting sample index (inclusive) |
+| `--end_idx` | int | `6018` | Ending sample index (inclusive) |
+| `--category` | str | `all` | Question category to process, or `all`. Same category choices as Stage 2 |
+| `--filter_distance` | float | `50.0` | Maximum distance (meters) from ego to include objects in scene context |
+| `--rear_filter` | float | `20.0` | Maximum distance (meters) for non-vehicle objects behind ego |
+| `--resize_factor` | int | `2` | Image downscale factor (1/n of original 1600x900) |
+| `--max_new_tokens` | int | `16384` | Maximum tokens the model generates per template. Higher than other stages because answers include detailed reasoning |
+| `--max_pairs` | int | `3` | Maximum pre-instantiated QA pairs per template. Each pair uses a different combination of grounded placeholder values |
+| `--num_workers` | int | `8` | Number of parallel multiprocessing workers |
+| `--log_dir` | str | `qa_gen_logs` | Directory for execution logs |
+
+### Input
+
+| Input | Description |
+|-------|-------------|
+| nuScenes pickle file (`--pkl_path`) | Same pickle file as previous stages |
+| Question bank (`--question_bank`) | Same question bank as Stage 2. Used to look up original placeholder definitions and expected answer types |
+| Stage 2 results (`--stage1_dir`) | Question selector output directory containing `sample_{idx}_applicable_questions.json` files with verified templates and grounded placeholders |
+
+### Output
+
+Two JSON files per sample, saved to `{output_dir}/`:
+
+| File | Description |
+|------|-------------|
+| `sample_{idx}_qa_results.json` | Generated QA pairs per template. Each entry includes: the instantiated question, positive answer, contrastive QA variations (altered placeholders), entity grounding details, and placeholder classification (ENTITY vs LEXICAL) |
+| `sample_{idx}_qa_detailed.json` | Full debug info with raw VLM responses, pre-instantiation details, and per-template reasoning traces |
+
+Log files saved to `{log_dir}/`:
+- `qa_gen_stage2_{timestamp}.log` — execution summary
+- `failed_qa_gen_indices_{timestamp}.txt` — indices that failed (for retry)
+
+---
+
+## Full Pipeline Example
+
+```bash
+cd /path/to/qwen-drive
+
+# Set environment variables
+export NUSCENES_PKL_PATH="/data/nuscenes/nuscenes2d_ego_temporal_infos_val.pkl"
+export QUESTION_BANK_PATH="/data/qa_dataset/question_bank.json"
+
+# Stage 1A & 1B can run in parallel (on separate GPU servers or sequentially)
+bash nuscenes_pipeline/scripts/run_risk_assessment.sh 0 6018 8
+bash nuscenes_pipeline/scripts/run_traffic_analysis.sh 0 6018 8
+
+# Stage 2: requires Stage 1A + 1B results
+bash nuscenes_pipeline/scripts/run_question_selector.sh 0 6018 all 8
+
+# Stage 3: requires Stage 2 results
+bash nuscenes_pipeline/scripts/run_answer_generator.sh 0 6018 all 8
+```
+
+---
+
+## Package Structure
+
+```
+qwen-drive/
+  nuscenes_pipeline/
+    __init__.py
+    core/
+      __init__.py
+      nuscenes_data_loader.py         Core data loading from nuScenes pickle
+      nuscenes_prompt_generator.py    Prompt construction, TTC computation, OBB collision detection
+      qa_utils.py                     SceneAnalyzer, question bank loader, template validation utilities
+    modules/
+      __init__.py
+      risk_assessment.py              Stage 1A - Risk/hazard analysis
+      traffic_analysis.py             Stage 1B - Traffic signal state analysis
+      question_selector.py            Stage 2  - Template selection from question bank
+      answer_generator.py             Stage 3  - Contrastive QA pair generation
+      sft_prompt_builder.py           SFT training prompt construction
+    visualization/
+      __init__.py
+      bev_generator.py                BEV visualization with ego, objects, velocities
+      make_video.py                   Combine panoramic + BEV images into video
+      pretty_formatting.py            Clean and format JSON result fields
+      qa_visualizer.py                Flask web dashboard for QA dataset verification
+    scripts/
+      run_risk_assessment.sh          Shell script for Stage 1A
+      run_traffic_analysis.sh         Shell script for Stage 1B
+      run_question_selector.sh        Shell script for Stage 2
+      run_answer_generator.sh         Shell script for Stage 3
+```
+
+### Core Modules
+
+- **nuscenes_data_loader.py**: Loads the pre-processed nuScenes pickle file, provides `NuScenesDataLoader` class for accessing samples with 6-view camera images, 3D bounding boxes, velocities, ego poses, and planning annotations. Handles egocentric camera flipping (rear cameras are horizontally mirrored).
+
+- **nuscenes_prompt_generator.py**: Constructs VQA prompts with ego vehicle state, 3D object lists with TTC computation. Implements OBB collision detection using the Separating Axis Theorem (SAT) in global coordinates, with acceleration-aware quadratic motion model for TTC estimation.
+
+- **qa_utils.py**: Provides `SceneAnalyzer` for extracting structured scene context (objects, ego state, camera visibility), `load_question_bank()` for loading template definitions, and category-specific prior builders that incorporate risk/traffic analysis results.
+
+---
+
+## Visualization Tools
+
+### bev_generator.py
+
+Generates Bird's Eye View (BEV) visualizations for nuScenes samples. Draws the ego vehicle, all ground truth objects with oriented bounding boxes, heading arrows, velocity vectors, and range circles on a dark-themed plot. The scene is rotated so the ego vehicle always faces upward.
+
+```bash
+# Single sample
+python -m nuscenes_pipeline.visualization.bev_generator --sample_idx 42
+
+# Range of samples
+python -m nuscenes_pipeline.visualization.bev_generator \
+    --start_idx 0 --end_idx 100 \
+    --output_dir bev_vis_results --bev_range 50
+```
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--pkl_path` | str | env `NUSCENES_PKL_PATH` | Path to nuScenes pickle file |
+| `--sample_idx` | int | `None` | Single sample index to visualize |
+| `--start_idx` | int | `None` | Start index for range processing |
+| `--end_idx` | int | `None` | End index for range processing |
+| `--output_dir` | str | `bev_vis_results` | Output directory for BEV PNG images |
+| `--bev_range` | float | `50.0` | Range in meters for each direction (50 = 100m total field of view) |
+| `--dpi` | int | `150` | Image resolution |
+
+**Output:** `{idx:04d}_{scene_token}_{sample_token}_bev.png` per sample
+
+**Library usage:**
 ```python
-import time
-from PIL import Image
-from sglang import Engine
-from qwen_vl_utils import process_vision_info
-from transformers import AutoProcessor, AutoConfig
+from nuscenes_pipeline.visualization.bev_generator import generate_bev, save_bev, bev_to_base64
 
+# Save to file
+save_bev(sample, loader, "output.png", bev_range=50.0)
 
-if __name__ == "__main__":
-    # TODO: change to your own checkpoint path
-    checkpoint_path = "Qwen/Qwen3-VL-235B-A22B-Instruct"
-    processor = AutoProcessor.from_pretrained(checkpoint_path)
+# Get as base64 for web embedding
+uri = bev_to_base64(sample, loader, bev_range=50.0)
 
-    messages = [
-        {
-            "role": "user",
-            "content": [
-              {
-                  "type": "image",
-                  "image": "https://ofasys-multimodal-wlcb-3-toshanghai.oss-accelerate.aliyuncs.com/wpf272043/keepme/image/receipt.png",
-              },
-              {"type": "text", "text": "Read all the text in the image."},
-            ],
-        }
-    ]
-
-    text = processor.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=True
-    )
-
-    image_inputs, _ = process_vision_info(messages, image_patch_size=processor.image_processor.patch_size)
-
-    llm = Engine(
-        model_path=checkpoint_path,
-        enable_multimodal=True,
-        mem_fraction_static=0.8,
-        tp_size=4,
-        attention_backend="fa3",
-        context_length=10240,
-        disable_cuda_graph=True,
-    )
-
-    start = time.time()
-    sampling_params = {"max_new_tokens": 1024}
-    response = llm.generate(prompt=text, image_data=image_inputs, sampling_params=sampling_params)
-    print(f"Response costs: {time.time() - start:.2f}s")
-    print(f"Generated text: {response['text']}")
+# Get raw matplotlib Figure for custom processing
+fig = generate_bev(sample, loader, bev_range=50.0)
 ```
 
+### make_video.py
 
-## Evaluation Reproduction
-To facilitate faithful reproduction of our reported results, we summarize our official evaluation settings below.
-- Inference runtime: [vLLM](https://github.com/vllm-project/vllm)
-- Evaluation frameworks: [VLMEvalKit](https://github.com/open-compass/VLMEvalKit), [lmms-eval](https://github.com/EvolvingLMMs-Lab/lmms-eval)
-- Notes:
-  - For a few benchmarks, we slightly modified the evaluation prompts; detailed changes will be documented in the upcoming technical report.
-  - A small number of benchmarks are internally constructed; we plan to release the code and reproduction assets afterwards.
-### Generation Hyperparameters
-#### Instruct models
-```bash
-export greedy='false'
-export seed=3407
-export top_p=0.8
-export top_k=20
-export temperature=0.7
-export repetition_penalty=1.0
-export presence_penalty=1.5
-export out_seq_length=32768
-```
-#### Thinking models
-```bash
-export greedy='false'
-export seed=1234
-export top_p=0.95
-export top_k=20
-export repetition_penalty=1.0
-export presence_penalty=0.0
-export temperature=0.6
-export out_seq_length=40960
-```
-
-
-## 🐳 Docker
-
-To simplify the deploy process, we provide docker images with pre-build environments: [qwenllm/qwenvl](https://hub.docker.com/r/qwenllm/qwenvl). You only need to install the driver and download model files to launch demos.
+Combines panoramic (6-view) and BEV visualization images side-by-side into an MP4 video using ffmpeg.
 
 ```bash
-docker run --gpus all --ipc=host --network=host --rm --name qwen3vl -it qwenllm/qwenvl:qwen3vl-cu128 bash
+python -m nuscenes_pipeline.visualization.make_video \
+    --vis_dir pan_vis_results \
+    --bev_dir bev_vis_results \
+    --start 0 --end 100 \
+    --sv_dir videos \
+    --output combined_visualization.mp4
 ```
 
-## Citation
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--output`, `-o` | str | `combined_visualization.mp4` | Output video filename |
+| `--start`, `-s` | int | `0` | Start index |
+| `--end`, `-e` | int | `100` | End index |
+| `--sv_dir` | str | `.` | Directory to save the output video |
+| `--vis_dir` | str | `pan_vis_results` | Directory containing panoramic visualization images |
+| `--bev_dir` | str | `bev_vis_results` | Directory containing BEV visualization images |
 
-If you find our paper and code useful in your research, please consider giving a star :star: and citation :pencil: :)
+**Requires:** `ffmpeg`, `opencv-python`
 
+### pretty_formatting.py
 
+Extracts and cleans text fields (system_prompt, prompt, response) from pipeline result JSON files. Handles corrupted text artifacts (mojibake, broken tokens) and outputs clean Python multiline string literals.
 
-
-```BibTeX
-
-@article{Qwen3-VL,
-      title={Qwen3-VL Technical Report}, 
-      author={Shuai Bai and Yuxuan Cai and Ruizhe Chen and Keqin Chen and Xionghui Chen and Zesen Cheng and Lianghao Deng and Wei Ding and Chang Gao and Chunjiang Ge and Wenbin Ge and Zhifang Guo and Qidong Huang and Jie Huang and Fei Huang and Binyuan Hui and Shutong Jiang and Zhaohai Li and Mingsheng Li and Mei Li and Kaixin Li and Zicheng Lin and Junyang Lin and Xuejing Liu and Jiawei Liu and Chenglong Liu and Yang Liu and Dayiheng Liu and Shixuan Liu and Dunjie Lu and Ruilin Luo and Chenxu Lv and Rui Men and Lingchen Meng and Xuancheng Ren and Xingzhang Ren and Sibo Song and Yuchong Sun and Jun Tang and Jianhong Tu and Jianqiang Wan and Peng Wang and Pengfei Wang and Qiuyue Wang and Yuxuan Wang and Tianbao Xie and Yiheng Xu and Haiyang Xu and Jin Xu and Zhibo Yang and Mingkun Yang and Jianxin Yang and An Yang and Bowen Yu and Fei Zhang and Hang Zhang and Xi Zhang and Bo Zheng and Humen Zhong and Jingren Zhou and Fan Zhou and Jing Zhou and Yuanzhi Zhu and Ke Zhu},
-	  journal={arXiv preprint arXiv:2511.21631},
-      year={2025}
-}
-
-@article{Qwen2.5-VL,
-  title={Qwen2.5-VL Technical Report},
-  author={Bai, Shuai and Chen, Keqin and Liu, Xuejing and Wang, Jialin and Ge, Wenbin and Song, Sibo and Dang, Kai and Wang, Peng and Wang, Shijie and Tang, Jun and Zhong, Humen and Zhu, Yuanzhi and Yang, Mingkun and Li, Zhaohai and Wan, Jianqiang and Wang, Pengfei and Ding, Wei and Fu, Zheren and Xu, Yiheng and Ye, Jiabo and Zhang, Xi and Xie, Tianbao and Cheng, Zesen and Zhang, Hang and Yang, Zhibo and Xu, Haiyang and Lin, Junyang},
-  journal={arXiv preprint arXiv:2502.13923},
-  year={2025}
-}
-
-@article{Qwen2-VL,
-  title={Qwen2-VL: Enhancing Vision-Language Model's Perception of the World at Any Resolution},
-  author={Wang, Peng and Bai, Shuai and Tan, Sinan and Wang, Shijie and Fan, Zhihao and Bai, Jinze and Chen, Keqin and Liu, Xuejing and Wang, Jialin and Ge, Wenbin and Fan, Yang and Dang, Kai and Du, Mengfei and Ren, Xuancheng and Men, Rui and Liu, Dayiheng and Zhou, Chang and Zhou, Jingren and Lin, Junyang},
-  journal={arXiv preprint arXiv:2409.12191},
-  year={2024}
-}
-
-@article{Qwen-VL,
-  title={Qwen-VL: A Versatile Vision-Language Model for Understanding, Localization, Text Reading, and Beyond},
-  author={Bai, Jinze and Bai, Shuai and Yang, Shusheng and Wang, Shijie and Tan, Sinan and Wang, Peng and Lin, Junyang and Zhou, Chang and Zhou, Jingren},
-  journal={arXiv preprint arXiv:2308.12966},
-  year={2023}
-}
+```bash
+python -m nuscenes_pipeline.visualization.pretty_formatting \
+    risk_assessment_results/0000_sample.json \
+    --fields system_prompt prompt response \
+    --out cleaned_output.py
 ```
 
-<br>
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `json_path` | str | **required** | Path to the result JSON file to clean |
+| `--fields` | str+ | `system_prompt prompt response` | Fields to extract and clean from the JSON |
+| `--out` | str | `None` (stdout) | Output file path. If omitted, prints to stdout |
+
+### qa_visualizer.py
+
+Interactive Flask web dashboard for verifying the SFT QA dataset. Displays 6-view panoramic images with bounding boxes extracted from questions (green) and answers (pink), alongside a BEV visualization with ground truth objects and velocity vectors.
+
+```bash
+python -m nuscenes_pipeline.visualization.qa_visualizer \
+    --data_dir /path/to/qa_dataset \
+    --pkl_path /path/to/nuscenes.pkl \
+    --port 6060
+```
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--port` | int | `6060` | Web server port |
+| `--host` | str | `0.0.0.0` | Web server host |
+| `--data_dir` | str | env `QA_DATASET_DIR` | Directory containing SFT dataset JSONs (`sft_train_no_objlist.json`, `sft_val_no_objlist.json`) |
+| `--pkl_path` | str | env `NUSCENES_PKL_PATH` | Path to nuScenes pickle file (for BEV generation) |
+
+**Keyboard shortcuts** (in browser):
+- Left/Right arrows: navigate between samples
+- `r`: jump to a random sample
+
+**Requires:** `flask`, `matplotlib`, `Pillow`
+
+---
+
+## Resize Factor Guide
+
+| Module | Recommended | Reason |
+|--------|-------------|--------|
+| Risk Assessment (1A) | `2` | Sufficient resolution for scene-level risk analysis |
+| Traffic Analysis (1B) | `1` | Full resolution needed for detecting small traffic signals |
+| Question Selector (2) | `2` | Template validation does not require fine-grained detail |
+| Answer Generator (3) | `2` | Answer quality is driven by reasoning, not pixel-level detail |
