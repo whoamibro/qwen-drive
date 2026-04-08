@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+ckpts/
+risk_assessment_results/
+traffic_analysis_results/
+qa_results/
+qa_outputs/
+sft_dataset/
+output_nuscenes_*/
+*.log
+wandb/

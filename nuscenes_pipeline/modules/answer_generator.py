@@ -1453,12 +1453,12 @@ def main():
     )
     parser.add_argument(
         "--stage1_dir", type=str,
-        default="qa_outputs_stage1",
-        help="Stage 1 output directory (contains category subdirs)",
+        default="qa_outputs",
+        help="Question selector output directory (contains category subdirs)",
     )
     parser.add_argument(
         "--output_dir", type=str,
-        default="qa_outputs_stage2",
+        default="qa_results",
         help="Output directory for QA results",
     )
 

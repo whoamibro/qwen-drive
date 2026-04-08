@@ -27,8 +27,8 @@ CATEGORY=${3:-"all"}
 NUM_WORKERS=${4:-8}
 
 # Output directories
-STAGE1_DIR="qa_outputs_stage1"
-OUTPUT_DIR="qa_outputs_stage2"
+STAGE1_DIR="qa_outputs"
+OUTPUT_DIR="qa_results"
 LOG_DIR="answer_generator_logs"
 
 echo "================================================================================"
