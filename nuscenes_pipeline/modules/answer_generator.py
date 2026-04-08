@@ -70,19 +70,41 @@ CAM_INDEX = {
     'CAM_BACK_LEFT': 4, 'CAM_BACK': 5, 'CAM_BACK_RIGHT': 6,
 }
 
-SYSTEM_PROMPT = """You are an expert autonomous driving Vision-Language QA generator.
+SYSTEM_PROMPT = """You are a driving expert agent, and should answer the question at the viewpoint of a driver.
 
-You are analyzing 6 surround-view camera images from an autonomous vehicle in egocentric order:
-  1. Front-left camera (CAM_FRONT_LEFT)
-  2. Front camera (CAM_FRONT)
-  3. Front-right camera (CAM_FRONT_RIGHT)
-  4. Rear-left camera (CAM_BACK_LEFT)  [horizontally flipped]
-  5. Rear camera (CAM_BACK)  [horizontally flipped]
-  6. Rear-right camera (CAM_BACK_RIGHT)  [horizontally flipped]
+You are analyzing 6 surround-view camera images from an ego vehicle.
+The vehicle uses a right-handed coordinate system (FLU - Forward-Left-Up):
+- X: forward (positive = ahead of ego)
+- Y: left (positive = left of ego)
+- Z: up
 
-Rear camera images (4, 5, 6) are horizontally flipped for egocentric consistency (left stays left, right stays right from the driver's perspective).
+All spatial references must be from the DRIVER'S PERSPECTIVE:
+- "ahead" / "behind" = along ego's forward axis
+- "left" / "right" = from the driver's seat
+- Distances are measured from the ego vehicle center
+
+=== CAMERA SYSTEM (Egocentric order) ===
+
+| Image | Camera | Viewing Direction | Notes |
+|-------|--------|-------------------|-------|
+| 1 | Front-left (CAM_FRONT_LEFT) | Forward-left scene | Left-front of ego |
+| 2 | Front (CAM_FRONT) | Straight ahead | Road, traffic lights, vehicles ahead |
+| 3 | Front-right (CAM_FRONT_RIGHT) | Forward-right scene | Right-front of ego |
+| 4 | Rear-left (CAM_BACK_LEFT) | Left-rear scene | Horizontally flipped for egocentric view |
+| 5 | Rear (CAM_BACK) | Straight behind | Horizontally flipped for egocentric view |
+| 6 | Rear-right (CAM_BACK_RIGHT) | Right-rear scene | Horizontally flipped for egocentric view |
+
+Rear camera images (4, 5, 6) are horizontally flipped so that left stays left
+and right stays right from the driver's perspective.
+
+CRITICAL: Before referencing any object or feature, VERIFY which image number
+it appears in. Do not assume — check the images.
 
 === YOUR ROLE ===
+
+You are BOTH a driving expert analyzing the scene AND a QA generator.
+When answering questions, reason as if you are the driver sitting in the
+ego vehicle, observing the surrounding environment through these 6 cameras.
 
 You have been given VALIDATED question templates from Stage 1. For each template,
 your job is to generate MULTIPLE CONTRASTIVE QA PAIRS by systematically varying
@@ -371,7 +393,52 @@ This is the most common error in QA generation — always check the velocity.
 
 
 ========================================================================
-  SECTION 6: ANSWER GENERATION RULES
+  SECTION 6: NON-EXISTENT REFERENCE HANDLING
+========================================================================
+
+When a question references a location, object, or condition that does NOT
+exist in the scene, apply the following CONSISTENT rule:
+
+**RULE: If the referenced location or entity does not exist in the scene,
+the answer is always "no" for y_or_n questions.**
+
+This applies regardless of how the question is phrased:
+  - "Are there any X in the <location>?"  → "no" (location doesn't exist)
+  - "Is the <location> clear of X?"       → "no" (location doesn't exist)
+  - "Is the <location> free of X?"        → "no" (location doesn't exist)
+  - "Can you see X at the <location>?"    → "no" (location doesn't exist)
+
+REASONING PATTERN: Always state that the location/entity does not exist
+in the scene first, then conclude "no" because the question's premise
+is not met.
+
+EXAMPLE (correct):
+  Q: "Is the intersection clear of parked cars?"
+  A: "no"
+  Reasoning: "No intersection is visible in any of the six camera views.
+  Since the referenced location does not exist in this scene, the
+  question cannot be affirmed. The answer is no."
+
+EXAMPLE (incorrect — DO NOT use vacuous truth):
+  Q: "Is the intersection clear of parked cars?"
+  A: "yes"  ← WRONG
+  Reasoning: "Since there is no intersection, it is trivially clear..."
+  ← This uses vacuous truth logic, which produces inconsistent answers.
+
+**Why this matters:** Vacuous truth ("X is trivially true because Y
+doesn't exist") creates contradictions. For the same scene:
+  - "Are there vehicles in the intersection?" → "no" (no intersection)
+  - "Is the intersection clear of vehicles?" → "yes" (vacuously true)
+These are logically contradictory for a training dataset. Always
+answer "no" when the premise doesn't hold.
+
+For other answer types (categorical, open_ended, num_count, etc.),
+explicitly state that the referenced entity/location is absent and
+provide the most factually grounded response possible.
+
+
+========================================================================
+  SECTION 7: ANSWER GENERATION RULES
 ========================================================================
 
 1. **y_or_n**: Strictly "yes" or "no".
@@ -386,7 +453,7 @@ This is the most common error in QA generation — always check the velocity.
 
 
 ========================================================================
-  SECTION 7: REASONING REQUIREMENTS
+  SECTION 8: REASONING REQUIREMENTS
 ========================================================================
 
 Your reasoning MUST:
@@ -403,7 +470,7 @@ For CONTRASTIVE reasoning, additionally:
 
 
 ========================================================================
-  SECTION 8: DRIVING CONTEXT
+  SECTION 9: DRIVING CONTEXT
 ========================================================================
 
 The ego-vehicle's current driving command provides context for scene dynamics.
@@ -1188,6 +1255,7 @@ def _worker_process_sample(
     output_dir: str,
     categories: Optional[List[str]] = None,
     max_pairs_per_template: int = 3,
+    temperature: float = 0.6,
 ) -> Dict:
     """
     Worker function: load Stage 1 results, enrich with question bank data,
@@ -1297,12 +1365,12 @@ def _worker_process_sample(
                 {"role": "user", "content": user_content},
             ]
 
-            # API call (temperature=0.0 for deterministic verification)
+            # API call
             response_obj = client.chat.completions.create(
                 model=model_name,
                 messages=messages,
                 max_tokens=max_new_tokens,
-                temperature=0.0,
+                temperature=temperature,
             )
             response_text = response_obj.choices[0].message.content
 
@@ -1484,6 +1552,8 @@ def main():
                         help="Image resize factor (1/n of original size)")
     parser.add_argument("--max_new_tokens", type=int, default=16384,
                         help="Maximum tokens to generate per template")
+    parser.add_argument("--temperature", type=float, default=0.6,
+                        help="Sampling temperature for generation (default: 0.6)")
     parser.add_argument("--max_pairs", type=int, default=3,
                         help="Maximum pre-instantiated pairs per template (default: 3)")
 
@@ -1528,6 +1598,7 @@ def main():
     log_and_print(f"  Rear filter: {args.rear_filter}m")
     log_and_print(f"  Resize factor: {args.resize_factor}")
     log_and_print(f"  Max new tokens: {args.max_new_tokens}")
+    log_and_print(f"  Temperature: {args.temperature}")
     log_and_print(f"  Max pairs per template: {args.max_pairs}")
     log_and_print(f"  Output dir: {args.output_dir}")
     log_and_print(f"  Log file: {log_file}")
@@ -1561,6 +1632,7 @@ def main():
             args.output_dir,
             categories,
             args.max_pairs,
+            args.temperature,
         )
         for idx in sample_indices
     ]
