@@ -25,6 +25,7 @@ START_IDX=${1:-0}
 END_IDX=${2:-6018}
 CATEGORY=${3:-"all"}
 NUM_WORKERS=${4:-8}
+SAMPLING_RATIO=${5:-""}
 
 # Output directories
 OUTPUT_DIR="qa_outputs/$CATEGORY"
@@ -40,12 +41,21 @@ echo "End Index: $END_IDX"
 echo "Category: $CATEGORY"
 echo "Num Workers: $NUM_WORKERS"
 echo "Total samples: $((END_IDX - START_IDX + 1))"
+if [ -n "$SAMPLING_RATIO" ]; then
+    echo "Sampling Ratio: ${SAMPLING_RATIO}%"
+fi
 echo ""
 echo "Output directories:"
 echo "  Results:  $OUTPUT_DIR"
 echo "  Logs:     $LOG_DIR"
 echo "================================================================================"
 echo ""
+
+# Build optional sampling argument
+SAMPLING_ARG=""
+if [ -n "$SAMPLING_RATIO" ]; then
+    SAMPLING_ARG="--sampling_ratio $SAMPLING_RATIO"
+fi
 
 # Run the module
 python3 -m nuscenes_pipeline.modules.question_selector \
@@ -61,7 +71,8 @@ python3 -m nuscenes_pipeline.modules.question_selector \
     --output_dir "$OUTPUT_DIR" \
     --log_dir "$LOG_DIR" \
     --risk_results_dir "$RISK_RESULTS_DIR" \
-    --traffic_results_dir "$TRAFFIC_RESULTS_DIR"
+    --traffic_results_dir "$TRAFFIC_RESULTS_DIR" \
+    $SAMPLING_ARG
 
 echo ""
 echo "================================================================================"

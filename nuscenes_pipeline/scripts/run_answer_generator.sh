@@ -25,20 +25,28 @@ START_IDX=${1:-0}
 END_IDX=${2:-6018}
 CATEGORY=${3:-"all"}
 NUM_WORKERS=${4:-8}
+MODE=${5:-"range"}   # "range" (default) or "from_stage1"
 
 # Output directories
 STAGE1_DIR="qa_outputs"
 OUTPUT_DIR="qa_results"
 LOG_DIR="answer_generator_logs"
+RISK_RESULTS_DIR="risk_assessment_results"
+TRAFFIC_RESULTS_DIR="traffic_analysis_results"
 
 echo "================================================================================"
 echo "Answer Generator - Stage 3"
 echo "================================================================================"
-echo "Start Index: $START_IDX"
-echo "End Index: $END_IDX"
 echo "Category: $CATEGORY"
 echo "Num Workers: $NUM_WORKERS"
-echo "Total samples: $((END_IDX - START_IDX + 1))"
+echo "Mode: $MODE"
+if [ "$MODE" = "from_stage1" ]; then
+    echo "  -> Auto-discovering samples from Stage 1 outputs in $STAGE1_DIR"
+else
+    echo "Start Index: $START_IDX"
+    echo "End Index: $END_IDX"
+    echo "Total samples: $((END_IDX - START_IDX + 1))"
+fi
 echo ""
 echo "Input:  $STAGE1_DIR"
 echo "Output: $OUTPUT_DIR"
@@ -46,10 +54,16 @@ echo "Logs:   $LOG_DIR"
 echo "================================================================================"
 echo ""
 
+# Build mode-specific arguments
+if [ "$MODE" = "from_stage1" ]; then
+    SAMPLE_ARGS="--from_stage1"
+else
+    SAMPLE_ARGS="--start_idx $START_IDX --end_idx $END_IDX"
+fi
+
 # Run the module
 python3 -m nuscenes_pipeline.modules.answer_generator \
-    --start_idx $START_IDX \
-    --end_idx $END_IDX \
+    $SAMPLE_ARGS \
     --category "$CATEGORY" \
     --num_workers $NUM_WORKERS \
     --max_new_tokens 16384 \
@@ -59,7 +73,9 @@ python3 -m nuscenes_pipeline.modules.answer_generator \
     --resize_factor 2 \
     --stage1_dir "$STAGE1_DIR" \
     --output_dir "$OUTPUT_DIR" \
-    --log_dir "$LOG_DIR"
+    --log_dir "$LOG_DIR" \
+    --risk_results_dir "$RISK_RESULTS_DIR" \
+    --traffic_results_dir "$TRAFFIC_RESULTS_DIR"
 
 echo ""
 echo "================================================================================"

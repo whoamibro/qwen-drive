@@ -45,6 +45,10 @@ from nuscenes_pipeline.core.qa_utils import (
     SceneAnalyzer, CAMERA_NAMES, CAMERA_NAME_MAP, VEHICLE_TYPES,
     VALID_CATEGORIES, load_question_bank, get_category_templates,
 )
+from nuscenes_pipeline.modules.question_selector import (
+    load_risk_assessment_response,
+    load_traffic_analysis_response,
+)
 
 
 # =============================================================================
@@ -97,6 +101,13 @@ All spatial references must be from the DRIVER'S PERSPECTIVE:
 Rear camera images (4, 5, 6) are horizontally flipped so that left stays left
 and right stays right from the driver's perspective.
 
+IMPORTANT — Ego-Centric Perspective:
+All observations and reasoning must be anchored to the ego-vehicle's position, heading, and driving context.
+- Spatial references (e.g., "ahead", "left lane", "behind") are relative to the ego-vehicle, NOT absolute coordinates.
+- "Relevance" means relevance to the ego-vehicle's current driving situation — objects, signals, and road features matter only insofar as they affect the ego-vehicle's path, decisions, or safety.
+- When a question mentions the ego-vehicle's lane, path, or vicinity, ground those terms using the camera views and prior knowledge from the ego-vehicle's perspective.
+- Answers and reasoning must reflect what the ego-vehicle's driver would observe and conclude from the provided views.
+
 CRITICAL: Before referencing any object or feature, VERIFY which image number
 it appears in. Do not assume — check the images.
 
@@ -104,7 +115,7 @@ it appears in. Do not assume — check the images.
 
 You are BOTH a driving expert analyzing the scene AND a QA generator.
 When answering questions, reason as if you are the driver sitting in the
-ego vehicle, observing the surrounding environment through these 6 cameras.
+ego-vehicle, observing the surrounding environment through these 6 cameras.
 
 You have been given VALIDATED question templates from Stage 1. For each template,
 your job is to generate MULTIPLE CONTRASTIVE QA PAIRS by systematically varying
@@ -552,8 +563,16 @@ def parse_json_response(response: str) -> Optional[object]:
 
 def load_stage1_results(stage1_dir: str, sample_idx: int, categories: Optional[List[str]] = None) -> Dict:
     """
-    Load Stage 1 applicable questions for a sample from category subdirs.
-    If categories is None, loads from all subdirs. Otherwise filters to specified categories.
+    Load Stage 1 applicable questions for a sample.
+
+    Supports two directory layouts produced by question_selector:
+      1. Per-category subdirs:  stage1_dir/<Category>/sample_X_applicable_questions.json
+         (created when question_selector runs with --category <Category>)
+      2. All-category subdir:   stage1_dir/all/sample_X_applicable_questions.json
+         (created when question_selector runs with --category all)
+
+    Both layouts can coexist; results are merged with per-category taking precedence.
+    If categories is None, loads all. Otherwise filters to the specified categories.
     Returns merged dict: {category: {q_01: {...}, q_02: {...}}}
     """
     merged = {}
@@ -561,16 +580,13 @@ def load_stage1_results(stage1_dir: str, sample_idx: int, categories: Optional[L
     if not os.path.isdir(stage1_dir):
         return merged
 
+    filename = f"sample_{sample_idx}_applicable_questions.json"
+
     for entry in os.listdir(stage1_dir):
         cat_dir = os.path.join(stage1_dir, entry)
         if not os.path.isdir(cat_dir):
             continue
 
-        # Filter by requested categories
-        if categories is not None and entry not in categories:
-            continue
-
-        filename = f"sample_{sample_idx}_applicable_questions.json"
         filepath = os.path.join(cat_dir, filename)
         if not os.path.isfile(filepath):
             continue
@@ -581,16 +597,51 @@ def load_stage1_results(stage1_dir: str, sample_idx: int, categories: Optional[L
         except (json.JSONDecodeError, IOError):
             continue
 
-        # The file has structure: {"<sample_idx>": {"<category>": {q_01: ...}}}
         sample_key = str(sample_idx)
         if sample_key not in data:
             continue
 
-        for category, questions in data[sample_key].items():
-            if questions:
-                merged[category] = questions
+        is_category_dir = entry in VALID_CATEGORIES
+
+        if is_category_dir:
+            # Per-category subdir: directory name is the category
+            if categories is not None and entry not in categories:
+                continue
+            for category, questions in data[sample_key].items():
+                if questions:
+                    merged[category] = questions
+        else:
+            # All-category subdir (e.g., "all"): file contains multiple categories
+            for category, questions in data[sample_key].items():
+                if categories is not None and category not in categories:
+                    continue
+                if questions and category not in merged:
+                    merged[category] = questions
 
     return merged
+
+
+def discover_stage1_sample_indices(stage1_dir: str) -> List[int]:
+    """
+    Scan all subdirectories of stage1_dir for applicable_questions files
+    and return a sorted list of sample indices that have Stage 1 results.
+    """
+    indices = set()
+    if not os.path.isdir(stage1_dir):
+        return []
+
+    pattern = re.compile(r'^sample_(\d+)_applicable_questions\.json$')
+
+    for entry in os.listdir(stage1_dir):
+        sub = os.path.join(stage1_dir, entry)
+        if not os.path.isdir(sub):
+            continue
+        for fname in os.listdir(sub):
+            m = pattern.match(fname)
+            if m:
+                indices.add(int(m.group(1)))
+
+    return sorted(indices)
 
 
 def format_object_positions(scene_data: Dict) -> str:
@@ -905,6 +956,9 @@ def build_verification_prompt(
     parts.append(f"  Answer Type: {t['answer_type']}")
     ea = t.get('expected_answers')
     parts.append(f"  Expected Answers: {json.dumps(ea) if ea else 'null'}")
+    ego_note = t.get('ego_centric_note')
+    if ego_note:
+        parts.append(f"  Ego-Centric Guidance: {ego_note}")
 
     # Show available placeholder pools for VLM-proposed contrasts
     valid_ph = t.get('valid_placeholders', {})
@@ -1045,11 +1099,13 @@ def enrich_template_with_question_bank(
             original_placeholders[bracket_key] = values
         enriched['original_placeholders'] = original_placeholders
 
-        # Get expected_answers and notes if available
+        # Get expected_answers, notes, and ego_centric_note if available
         if 'expected_answers' in bank_template:
             enriched['expected_answers'] = bank_template['expected_answers']
         if 'notes' in bank_template:
             enriched['notes'] = bank_template['notes']
+        if 'ego_centric_note' in bank_template:
+            enriched['ego_centric_note'] = bank_template['ego_centric_note']
 
     return enriched
 
@@ -1097,6 +1153,10 @@ def build_qa_generation_prompt(
 
     notes = t.get('notes')
     parts.append(f"  Notes: {notes if notes else 'null'}")
+
+    ego_note = t.get('ego_centric_note')
+    if ego_note:
+        parts.append(f"  Ego-Centric Guidance: {ego_note}")
 
     parts.append(f"  Original Placeholders (full template bank candidates):")
     parts.append(format_placeholders_block(t.get('original_placeholders', {})))
@@ -1216,17 +1276,22 @@ _worker_client = None
 _worker_loader = None
 _worker_analyzer = None
 _worker_question_bank = None
+_worker_risk_results_dir = None
+_worker_traffic_results_dir = None
 
 
 def _worker_init(
     model_name: str, api_base: str, api_key: str,
     pkl_path: str, question_bank_path: str,
+    risk_results_dir: str = "",
+    traffic_results_dir: str = "",
 ):
     """
     Initializer for each worker process.
     Creates the OpenAI client, NuScenesDataLoader, SceneAnalyzer, and loads question bank.
     """
     global _worker_client, _worker_loader, _worker_analyzer, _worker_question_bank
+    global _worker_risk_results_dir, _worker_traffic_results_dir
 
     from openai import OpenAI as _OpenAI
     _worker_client = _OpenAI(
@@ -1238,6 +1303,8 @@ def _worker_init(
     _worker_loader = NuScenesDataLoader(pkl_path)
     _worker_analyzer = SceneAnalyzer(_worker_loader)
     _worker_question_bank = load_question_bank(question_bank_path)
+    _worker_risk_results_dir = risk_results_dir
+    _worker_traffic_results_dir = traffic_results_dir
 
 
 # =============================================================================
@@ -1262,12 +1329,15 @@ def _worker_process_sample(
     pre-instantiate QA pairs, call VLM for verification + additional contrasts.
     """
     global _worker_client, _worker_loader, _worker_analyzer, _worker_question_bank
+    global _worker_risk_results_dir, _worker_traffic_results_dir
 
     try:
         client = _worker_client
         loader = _worker_loader
         analyzer = _worker_analyzer
         question_bank = _worker_question_bank
+        risk_results_dir = _worker_risk_results_dir
+        traffic_results_dir = _worker_traffic_results_dir
 
         # 1. Load Stage 1 results for this sample
         stage1_results = load_stage1_results(stage1_dir, sample_idx, categories)
@@ -1313,6 +1383,10 @@ def _worker_process_sample(
         # 6. Get driving command
         driving_command = scene_data['ego_info'].get('driving_command', 'Unknown')
 
+        # 6b. Load prior analysis responses (shared across templates)
+        risk_response = load_risk_assessment_response(risk_results_dir, sample_idx)
+        traffic_response = load_traffic_analysis_response(traffic_results_dir, sample_idx)
+
         # 7. Flatten all templates across categories, enrich with question bank
         all_templates = []
         for category, questions in stage1_results.items():
@@ -1354,6 +1428,22 @@ def _worker_process_sample(
                 template_num=tmpl_idx + 1,
                 total_templates=total_templates,
             )
+
+            # Prepend prior analysis for risk/traffic categories
+            tmpl_category = tmpl.get('category', '')
+            if tmpl_category == "Dynamic_Agents_and_Risk_Assessment" and risk_response:
+                prompt = (
+                    "\n\n=== RISK ASSESSMENT ANALYSIS (from prior analysis) ===\n"
+                    f"{risk_response}\n"
+                    "=== END OF RISK ASSESSMENT ANALYSIS ===\n\n"
+                ) + prompt
+
+            if tmpl_category == "Traffic_Signs_and_Signals" and traffic_response:
+                prompt = (
+                    "\n\n=== TRAFFIC SIGNAL ANALYSIS (from prior analysis) ===\n"
+                    f"{traffic_response}\n"
+                    "=== END OF TRAFFIC SIGNAL ANALYSIS ===\n\n"
+                ) + prompt
 
             # Build user content: images + prompt
             user_content = list(image_content) + [
@@ -1529,10 +1619,26 @@ def main():
         default="qa_results",
         help="Output directory for QA results",
     )
+    parser.add_argument(
+        "--risk_results_dir", type=str,
+        default="risk_assessment_results",
+        help="Directory containing risk assessment result JSONs "
+             "(prepended to prompt for Dynamic_Agents_and_Risk_Assessment templates)",
+    )
+    parser.add_argument(
+        "--traffic_results_dir", type=str,
+        default="traffic_analysis_results",
+        help="Directory containing traffic analysis result JSONs "
+             "(prepended to prompt for Traffic_Signs_and_Signals templates)",
+    )
 
     # Sample range
     parser.add_argument("--start_idx", type=int, default=0, help="Starting sample index")
     parser.add_argument("--end_idx", type=int, default=6018, help="Ending sample index")
+    parser.add_argument("--from_stage1", action="store_true",
+                        help="Auto-discover sample indices from Stage 1 output files "
+                             "instead of using start_idx/end_idx range. "
+                             "Processes only samples that have applicable_questions results.")
 
     # Category selection
     parser.add_argument(
@@ -1568,7 +1674,13 @@ def main():
     args = parser.parse_args()
 
     # Determine sample indices
-    sample_indices = list(range(args.start_idx, args.end_idx + 1))
+    if args.from_stage1:
+        sample_indices = discover_stage1_sample_indices(args.stage1_dir)
+        if not sample_indices:
+            print(f"ERROR: No Stage 1 results found in {args.stage1_dir}/")
+            sys.exit(1)
+    else:
+        sample_indices = list(range(args.start_idx, args.end_idx + 1))
 
     # Create output directories
     os.makedirs(args.output_dir, exist_ok=True)
@@ -1590,7 +1702,10 @@ def main():
     log_and_print(f"  API base: {args.api_base}")
     log_and_print(f"  Model: {args.model_name}")
     log_and_print(f"  Num workers: {args.num_workers}")
-    log_and_print(f"  Sample range: {args.start_idx} to {args.end_idx} ({len(sample_indices)} samples)")
+    if args.from_stage1:
+        log_and_print(f"  Mode: from_stage1 (auto-discovered {len(sample_indices)} samples)")
+    else:
+        log_and_print(f"  Sample range: {args.start_idx} to {args.end_idx} ({len(sample_indices)} samples)")
     log_and_print(f"  Stage 1 dir: {args.stage1_dir}")
     log_and_print(f"  Question bank: {args.question_bank}")
     log_and_print(f"  Category: {args.category}")
@@ -1604,6 +1719,8 @@ def main():
     log_and_print(f"  Log file: {log_file}")
     log_and_print(f"  Camera order: FL, F, FR, RL, R, RR (egocentric)")
     log_and_print(f"  Rear cameras: horizontally flipped")
+    log_and_print(f"  Risk results dir: {args.risk_results_dir}")
+    log_and_print(f"  Traffic results dir: {args.traffic_results_dir}")
     log_and_print("=" * 80)
 
     # Verify vLLM server
@@ -1655,6 +1772,7 @@ def main():
         initargs=(
             args.model_name, args.api_base, args.api_key,
             args.pkl_path, args.question_bank,
+            args.risk_results_dir, args.traffic_results_dir,
         ),
     ) as pool:
         results_iter = pool.imap_unordered(_worker_wrapper, worker_args)
@@ -1686,7 +1804,10 @@ def main():
     log_and_print(f"\n{'=' * 80}")
     log_and_print("Stage 2: Tag Refinement + Contrastive QA Pair Generation Complete")
     log_and_print(f"{'=' * 80}")
-    log_and_print(f"  Sample range: {args.start_idx} to {args.end_idx}")
+    if args.from_stage1:
+        log_and_print(f"  Mode: from_stage1 (auto-discovered)")
+    else:
+        log_and_print(f"  Sample range: {args.start_idx} to {args.end_idx}")
     log_and_print(f"  Total samples: {len(sample_indices)}")
     log_and_print(f"  Successful: {success_count}")
     log_and_print(f"  Skipped (no Stage 1 data): {skipped_count}")

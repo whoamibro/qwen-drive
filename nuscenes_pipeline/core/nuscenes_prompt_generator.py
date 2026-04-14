@@ -105,7 +105,7 @@ def transform_bbox_to_global(bbox: np.ndarray, ego2global_rotation: List[float],
     Returns:
         Transformed bbox in global frame [x, y, z, l, w, h, yaw]
     """
-    from nuscenes_data_loader import quaternion_to_rotation_matrix
+    from nuscenes_pipeline.core.nuscenes_data_loader import quaternion_to_rotation_matrix
 
     # Extract position and yaw
     pos_ego = np.array([bbox[0], bbox[1], bbox[2]])
@@ -146,7 +146,7 @@ def transform_velocity_to_global(velocity: np.ndarray, ego2global_rotation: List
     Returns:
         Transformed velocity in global frame [vx, vy] (ENU)
     """
-    from nuscenes_data_loader import quaternion_to_rotation_matrix
+    from nuscenes_pipeline.core.nuscenes_data_loader import quaternion_to_rotation_matrix
 
     # Transform velocity vector (only 2D horizontal component)
     # Apply forward rotation: ego to global
@@ -171,7 +171,7 @@ def transform_velocity_to_ego(velocity: np.ndarray, ego2global_rotation: List[fl
     Returns:
         Transformed velocity in ego frame [vx, vy] (FLU)
     """
-    from nuscenes_data_loader import quaternion_to_rotation_matrix
+    from nuscenes_pipeline.core.nuscenes_data_loader import quaternion_to_rotation_matrix
 
     # Transform velocity vector (only 2D horizontal component)
     # Use inverse rotation: global to ego is the transpose of ego to global

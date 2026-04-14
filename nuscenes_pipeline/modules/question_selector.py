@@ -85,8 +85,8 @@ def load_risk_assessment_response(risk_results_dir: str, sample_idx: int) -> Opt
 
 
 def load_traffic_analysis_response(traffic_results_dir: str, sample_idx: int) -> Optional[str]:
-    """Load traffic analysis response. Files: {idx:04d}_*_traffic_v3.json"""
-    return _load_prior_analysis_response(traffic_results_dir, sample_idx, "traffic_v3")
+    """Load traffic analysis response. Files: {idx:04d}_*_traffic.json"""
+    return _load_prior_analysis_response(traffic_results_dir, sample_idx, "traffic")
 
 
 def image_to_base64_data_uri(img_pil: Image.Image, format: str = "JPEG") -> str:
@@ -160,8 +160,8 @@ CAM_LABELS = {
 }
 
 # System prompt matching egocentric camera order (same as risk assessment pipeline)
-SYSTEM_PROMPT = """You are an expert autonomous driving vision-language model assistant.
-You are analyzing 6 camera views from an autonomous vehicle in the following order:
+SYSTEM_PROMPT = """You are an expert autonomous driving vision-language model assistant performing ego-centric scene analysis.
+You are analyzing 6 camera views from an autonomous vehicle (the "ego-vehicle") in the following order:
 1. Front-left camera (CAM_FRONT_LEFT)
 2. Front camera (CAM_FRONT)
 3. Front-right camera (CAM_FRONT_RIGHT)
@@ -171,7 +171,13 @@ You are analyzing 6 camera views from an autonomous vehicle in the following ord
 
 Rear camera images are horizontally flipped for egocentric consistency (left stays left, right stays right).
 
-Your task is to evaluate question templates and select the ones that are applicable to the current scene based on visual analysis and prior knowledge."""
+IMPORTANT — Ego-Centric Perspective:
+All observations and reasoning must be anchored to the ego-vehicle's position, heading, and driving context.
+- Spatial references (e.g., "ahead", "left lane", "behind") are relative to the ego-vehicle, NOT absolute coordinates.
+- "Relevance" means relevance to the ego-vehicle's current driving situation — objects, signals, and road features matter only insofar as they affect the ego-vehicle's path, decisions, or safety.
+- When a template mentions the ego-vehicle's lane, path, or vicinity, ground those terms using the camera views and prior knowledge from the ego-vehicle's perspective.
+
+Your task is to evaluate question templates and select the ones that are applicable to the current scene, judging applicability strictly from the ego-vehicle's perspective."""
 
 
 # ============================================================================
@@ -575,6 +581,13 @@ def main():
     parser.add_argument("--num_workers", type=int, default=8,
                         help="Number of parallel worker processes")
 
+    # Sampling
+    parser.add_argument("--sampling_ratio", type=float, default=None,
+                        help="Percentage of samples to randomly select (e.g., 5 for 5%%). "
+                             "When set, randomly samples this ratio from the [start_idx, end_idx] range.")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed for reproducible sampling (default: 42)")
+
     # Logging
     parser.add_argument("--log_dir", type=str, default="continuous_qa_logs",
                         help="Directory for log files")
@@ -582,7 +595,15 @@ def main():
     args = parser.parse_args()
 
     # Determine sample indices
-    sample_indices = list(range(args.start_idx, args.end_idx + 1))
+    all_indices = list(range(args.start_idx, args.end_idx + 1))
+
+    if args.sampling_ratio is not None:
+        ratio = args.sampling_ratio / 100.0
+        n_samples = max(1, int(len(all_indices) * ratio))
+        rng = np.random.RandomState(args.seed)
+        sample_indices = sorted(rng.choice(all_indices, size=n_samples, replace=False).tolist())
+    else:
+        sample_indices = all_indices
 
     # Create output directories
     os.makedirs(args.output_dir, exist_ok=True)
@@ -604,7 +625,11 @@ def main():
     log_and_print(f"  API base: {args.api_base}")
     log_and_print(f"  Model: {args.model_name}")
     log_and_print(f"  Num workers: {args.num_workers}")
-    log_and_print(f"  Sample range: {args.start_idx} to {args.end_idx} ({len(sample_indices)} samples)")
+    log_and_print(f"  Sample range: {args.start_idx} to {args.end_idx} ({len(all_indices)} total)")
+    if args.sampling_ratio is not None:
+        log_and_print(f"  Sampling ratio: {args.sampling_ratio}% -> {len(sample_indices)} samples (seed={args.seed})")
+    else:
+        log_and_print(f"  Processing all {len(sample_indices)} samples")
     log_and_print(f"  Category: {args.category}")
     log_and_print(f"  Filter distance: {args.filter_distance}m")
     if args.rear_filter is not None:

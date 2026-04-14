@@ -1055,10 +1055,21 @@ def load_question_bank(path: str) -> Dict:
 
 
 def get_category_templates(question_bank: Dict, category: str) -> List[Dict]:
-    """Get templates for a specific category."""
+    """Get templates for a specific category.
+
+    Supports both legacy format (templates directly on category) and
+    v3 format (templates nested inside sub_categories).
+    """
     for cat in question_bank['categories']:
         if cat['category'] == category:
-            return cat['templates']
+            # v3 format: templates are nested inside sub_categories
+            if 'sub_categories' in cat:
+                templates = []
+                for sub_cat in cat['sub_categories']:
+                    templates.extend(sub_cat.get('templates', []))
+                return templates
+            # Legacy format: templates directly on category
+            return cat.get('templates', [])
     return []
 
 
@@ -1070,6 +1081,7 @@ def format_templates_for_batch_validation(templates: List[Dict], start_idx: int)
     - The template string with placeholders highlighted
     - All possible values for each placeholder
     - What needs to be verified in the scene
+    - Ego-centric note (if present) to guide ego-perspective evaluation
     """
     lines = []
     for i, t in enumerate(templates):
@@ -1077,10 +1089,19 @@ def format_templates_for_batch_validation(templates: List[Dict], start_idx: int)
         template_str = t['template']
         placeholders = t.get('placeholders', {})
         answer_type = t.get('answer_type', 'open_ended')
+        template_id = t.get('template_id', '')
+        ego_note = t.get('ego_centric_note', '')
 
-        lines.append(f"--- Template #{global_idx} ---")
+        header = f"--- Template #{global_idx}"
+        if template_id:
+            header += f" [{template_id}]"
+        header += " ---"
+        lines.append(header)
         lines.append(f"Question: {template_str}")
         lines.append(f"Answer Type: {answer_type}")
+
+        if ego_note:
+            lines.append(f"Ego-Centric Guidance: {ego_note}")
 
         if placeholders:
             lines.append("Placeholders to verify:")
@@ -1089,9 +1110,9 @@ def format_templates_for_batch_validation(templates: List[Dict], start_idx: int)
                     lines.append(f"  <{tag}>: {values}")
                 else:
                     lines.append(f"  <{tag}>: [{values}]")
-            lines.append("Verification task: Check which placeholder values can be grounded in the scene.")
+            lines.append("Verification task: Check which placeholder values can be grounded in the scene from the ego-vehicle's perspective.")
         else:
-            lines.append("No placeholders - verify if the question is answerable for this scene.")
+            lines.append("No placeholders - verify if the question is answerable for this scene from the ego-vehicle's perspective.")
 
         lines.append("")
 
@@ -1110,11 +1131,11 @@ def build_batch_validation_prompt(category: str, prior_knowledge: str,
     3. Report which templates are applicable and with which placeholder values
     """
 
-    prompt = f"""You are validating question templates for a Visual Question Answering (VQA) dataset.
+    prompt = f"""You are validating ego-centric question templates for a Visual Question Answering (VQA) dataset.
 
-TASK: For each template below, determine if it is APPLICABLE to this scene by verifying whether the placeholder values can be grounded in the provided images and prior information.
+TASK: For each template below, determine if it is APPLICABLE to the current scene by verifying whether the placeholder values can be grounded in the provided images and prior information, all from the ego-vehicle's perspective.
 
-You are viewing 6 camera images (Front-left, Front, Front-right, Rear-left, Rear, Rear-right) from an autonomous vehicle. Rear camera images are horizontally flipped for egocentric consistency.
+You are viewing 6 camera images (Front-left, Front, Front-right, Rear-left, Rear, Rear-right) from the ego-vehicle. Rear camera images are horizontally flipped for egocentric consistency (left stays left, right stays right from the driver's viewpoint).
 
 {prior_knowledge}
 
@@ -1122,31 +1143,34 @@ You are viewing 6 camera images (Front-left, Front, Front-right, Rear-left, Rear
 
 {format_templates_for_batch_validation(templates, start_idx)}
 
-=== VALIDATION CRITERIA ===
+=== VALIDATION CRITERIA (EGO-CENTRIC) ===
 
-**APPLICABLE**: A template is APPLICABLE if AT LEAST ONE semantically consistent combination of placeholder values can be grounded in the provided images and prior information.
+**APPLICABLE**: A template is APPLICABLE if AT LEAST ONE semantically consistent combination of placeholder values can be grounded in the provided images and prior information from the ego-vehicle's perspective.
 
-**EXISTENCE**: A placeholder value is considered to EXIST only if it can be verified from the 6-view images AND/OR is explicitly supported by the prior information.
+**EGO-CENTRIC GROUNDING**: All spatial terms (e.g., "ahead", "left", "adjacent lane", "behind") must be interpreted relative to the ego-vehicle's position and heading. An object or feature is relevant only if it pertains to the ego-vehicle's driving context — its current lane, intended path, surrounding traffic, or applicable signals/signs.
+
+**EXISTENCE**: A placeholder value is considered to EXIST only if it can be verified from the 6-view images AND/OR is explicitly supported by the prior information. When "Ego-Centric Guidance" is provided for a template, use it to determine which camera views and spatial zones are relevant for verification.
 
 **NOT_APPLICABLE**: Mark as NOT_APPLICABLE if:
-- None of the placeholder values exist in the scene
-- The question cannot be meaningfully answered
-- The scene context is irrelevant to the question
-- The grounding between placeholder values and the scene is ambiguous or unsupported
+- None of the placeholder values exist in the scene from the ego-vehicle's perspective
+- The question cannot be meaningfully answered given the ego-vehicle's current situation
+- The scene context is irrelevant to the ego-vehicle's driving context
+- The grounding between placeholder values and the ego-vehicle's perspective is ambiguous or unsupported
 
 === VALIDATION PROCESS ===
 
 For EACH template:
 
 1. **If the template HAS placeholders:**
-   - Inspect each placeholder tag (e.g., <object>, <direction>, <place>)
-   - For each possible value, verify if it can be grounded in the images or prior
-   - List ONLY the values that are verifiably present
+   - Inspect each placeholder tag (e.g., <object>, <direction>, <spatial_relation>)
+   - For each possible value, verify if it can be grounded in the images or prior from the ego-vehicle's viewpoint
+   - Use the "Ego-Centric Guidance" note (if provided) to determine which camera views and spatial references are relevant
+   - List ONLY the values that are verifiably present relative to the ego-vehicle
    - Template is applicable if at least one valid combination exists
 
 2. **If the template has NO placeholders:**
-   - Verify if the question can be meaningfully answered for this scene
-   - Check if required objects/conditions are verifiably present
+   - Verify if the question can be meaningfully answered for this scene from the ego-vehicle's perspective
+   - Check if required objects/conditions are verifiably present in the ego-vehicle's driving context
 
 === OUTPUT FORMAT ===
 
@@ -1160,7 +1184,7 @@ Respond with a JSON object:
                 "<tag1>": ["verified_value1", "verified_value2"],
                 "<tag2>": ["verified_value"]
             }},
-            "reason": "<brief explanation of what was verified>"
+            "reason": "<brief explanation of what was verified from the ego-vehicle's perspective>"
         }},
         ...
     ]
@@ -1168,7 +1192,7 @@ Respond with a JSON object:
 
 - Include ALL templates from this batch in your response
 - For templates without placeholders, set "valid_placeholders" to {{}}
-- Only include placeholder values that are VERIFIABLY grounded in the scene
+- Only include placeholder values that are VERIFIABLY grounded in the scene from the ego-vehicle's perspective
 
 Output ONLY the JSON object, no additional text."""
 
