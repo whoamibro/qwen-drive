@@ -48,6 +48,7 @@ def process_qa_file(
     loader: NuScenesDataLoader,
     data_root: str,
     infos: list,
+    no_contrast: bool = False,
 ) -> list:
     """
     Process a single *_qa_results.json file (OBJ-removed) into SFT samples.
@@ -98,45 +99,46 @@ def process_qa_file(
                         "conversations": conversations,
                     })
 
-            # Contrastive QA
-            cont = pair.get('contrastive')
-            if cont and cont.get('instantiated_question') and cont.get('answer'):
-                q = cont['instantiated_question']
-                a = str(cont['answer'])
-                if (q, a) not in seen_qa:
-                    seen_qa.add((q, a))
-                    conversations = build_sft_conversations_no_objects(
-                        sample=sample,
-                        loader=loader,
-                        question=q,
-                        answer=cont['answer'],
-                        reasoning=cont.get('reasoning'),
-                        answer_type=answer_type,
-                    )
-                    sft_samples.append({
-                        "image": image_paths,
-                        "conversations": conversations,
-                    })
-
-            # VLM-proposed additional contrastives
-            for vlm_cont in pair.get('vlm_proposed_contrastives', []):
-                if vlm_cont and vlm_cont.get('instantiated_question') and vlm_cont.get('answer'):
-                    q = vlm_cont['instantiated_question']
-                    a = str(vlm_cont['answer'])
+            if not no_contrast:
+                # Contrastive QA
+                cont = pair.get('contrastive')
+                if cont and cont.get('instantiated_question') and cont.get('answer'):
+                    q = cont['instantiated_question']
+                    a = str(cont['answer'])
                     if (q, a) not in seen_qa:
                         seen_qa.add((q, a))
                         conversations = build_sft_conversations_no_objects(
                             sample=sample,
                             loader=loader,
                             question=q,
-                            answer=vlm_cont['answer'],
-                            reasoning=vlm_cont.get('reasoning'),
+                            answer=cont['answer'],
+                            reasoning=cont.get('reasoning'),
                             answer_type=answer_type,
                         )
                         sft_samples.append({
                             "image": image_paths,
                             "conversations": conversations,
                         })
+
+                # VLM-proposed additional contrastives
+                for vlm_cont in pair.get('vlm_proposed_contrastives', []):
+                    if vlm_cont and vlm_cont.get('instantiated_question') and vlm_cont.get('answer'):
+                        q = vlm_cont['instantiated_question']
+                        a = str(vlm_cont['answer'])
+                        if (q, a) not in seen_qa:
+                            seen_qa.add((q, a))
+                            conversations = build_sft_conversations_no_objects(
+                                sample=sample,
+                                loader=loader,
+                                question=q,
+                                answer=vlm_cont['answer'],
+                                reasoning=vlm_cont.get('reasoning'),
+                                answer_type=answer_type,
+                            )
+                            sft_samples.append({
+                                "image": image_paths,
+                                "conversations": conversations,
+                            })
 
     return sft_samples
 
@@ -157,6 +159,9 @@ def main():
     parser.add_argument('--val_size', type=int, default=40000,
                         help='Fixed number of validation samples (rest goes to train)')
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--no_contrast', action='store_true',
+                        help='Exclude contrastive and VLM-proposed contrastive QA pairs. '
+                             'Output files will have _no_contrast suffix.')
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -173,13 +178,14 @@ def main():
 
     all_samples = []
     for qa_path in tqdm(qa_files, desc="Processing QA files"):
-        samples = process_qa_file(qa_path, loader, args.data_root, infos)
+        samples = process_qa_file(qa_path, loader, args.data_root, infos,
+                                  no_contrast=args.no_contrast)
         all_samples.extend(samples)
 
     print(f"\nTotal SFT samples generated: {len(all_samples)}")
 
     random.shuffle(all_samples)
-    val_size = min(args.val_size, len(all_samples) // 2)  # cap at 50% max
+    val_size = min(args.val_size, len(all_samples) // 5)  # cap at 20% max
     val_samples = all_samples[:val_size]
     train_samples = all_samples[val_size:]
 
@@ -187,8 +193,9 @@ def main():
     print(f"Val samples:   {len(val_samples)}")
 
     os.makedirs(args.output_dir, exist_ok=True)
-    train_path = os.path.join(args.output_dir, 'sft_train_no_objlist.json')
-    val_path = os.path.join(args.output_dir, 'sft_val_no_objlist.json')
+    suffix = '_no_contrast' if args.no_contrast else ''
+    train_path = os.path.join(args.output_dir, f'sft_train_no_objlist{suffix}.json')
+    val_path = os.path.join(args.output_dir, f'sft_val_no_objlist{suffix}.json')
 
     with open(train_path, 'w') as f:
         json.dump(train_samples, f, indent=2, ensure_ascii=False)

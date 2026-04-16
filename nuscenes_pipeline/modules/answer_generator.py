@@ -279,7 +279,8 @@ Across all pairs generated for a single template, ensure:
      - For y_or_n: not all positives should be "yes" — also include pairs where
        the positive is "no" and the contrastive is "yes" (by using originally-absent
        values as positive, confirming absence, then swapping to present values).
-     - For categorical: cover as many expected_answer categories as possible.
+     - For mcq: vary the correct option letter (A-E) across pairs; use different
+       distractors drawn from different aspects of the scene.
   4. **Difficulty diversity**: Mix easy pairs (large distance gaps, obvious presence/absence)
      with harder pairs (smaller margins, subtle distinctions).
   5. **Camera diversity**: Spread object selections across all 6 camera views,
@@ -301,20 +302,37 @@ Across all pairs generated for a single template, ensure:
     e) For ENTITY placeholders: select a different OBJ that changes the answer
     f) For no-placeholder templates: if the answer is fixed, contrastive is null.
 
-**categorical** (39 templates):
-  POSITIVE → answer A  |  CONTRASTIVE → answer B (a different valid category)
-  Note: Many categorical templates have an `expected_answers` field
-  (e.g., ["static", "dynamic"], ["red", "yellow", "green"]).
-  Strategies:
-    a) For two-object comparison templates: swap object order or swap one object
-       to shift which category wins
-    b) For state/attribute templates: identify a different object of the same type
-       in a different state (e.g., a different traffic light showing a different color)
-    c) For no-placeholder categorical: apply question to different objects to get
-       different categorical answers
-    d) If only one valid state exists in the scene, set contrastive to null.
+**mcq** (68 templates — multiple choice with 5 options A-E):
+  Each MCQ question MUST have exactly 5 options labeled (A) through (E).
+  The correct answer is the option letter (e.g., "B").
 
-**open_ended** (33 templates):
+  Option construction rules:
+    1. **Correct option**: The factually correct answer grounded in the scene.
+    2. **Distractors (4 options)**: Plausible but incorrect alternatives.
+       - Draw from `expected_answers` when available (these are the candidate pool).
+       - If `expected_answers` has fewer than 5 values, generate plausible
+         distractors that are semantically consistent with the question type
+         (e.g., for a color question: other colors; for a vehicle type: other types).
+       - If `expected_answers` has more than 5 values, select the 4 most
+         plausible distractors from the pool.
+    3. **Distractor quality**:
+       - At least 1 distractor should be a "close miss" (plausible for the scene).
+       - At least 1 distractor should be clearly wrong (to set a difficulty range).
+       - Avoid absurd or semantically incoherent options.
+    4. **Randomize position**: The correct answer should NOT always be option (A).
+       Vary the position across pairs.
+
+  POSITIVE → correct option letter  |  CONTRASTIVE → different correct option letter
+  Strategies:
+    a) For object/state templates: swap placeholder to a different object/state
+       that produces a different correct answer and different MCQ options
+    b) For comparison templates: swap object order or swap one object to shift
+       which option wins
+    c) For view-specific templates: change <direction>/<view> to get a different
+       set of visible objects → different correct answer
+    d) If only one valid answer exists in the scene, set contrastive to null.
+
+**open_ended** (21 templates):
   POSITIVE → factual descriptive answer  |  CONTRASTIVE → different factual answer
   Strategies:
     a) Change <agent>/<object> to a different entity → different description
@@ -323,27 +341,16 @@ Across all pairs generated for a single template, ensure:
     d) For no-placeholder templates: if only one valid answer exists,
        set contrastive to null.
 
-**num_count** (6 templates):
+**num_count** (8 templates):
   POSITIVE → count N (where N > 0)  |  CONTRASTIVE → count M (where M ≠ N, ideally 0)
   Strategies:
     a) Swap <object> to an absent category → count = 0
     b) Swap <direction>/<view> to a view with a different count
 
-**numerical** (3 templates — TTC, closing speed, DTC):
-  POSITIVE → value for agent X  |  CONTRASTIVE → notably different value for agent Y
-  Strategies:
-    a) Change <agent> to a different agent at a very different distance/speed
-
-**distance** (2 templates):
+**distance** (3 templates):
   POSITIVE → distance to object X  |  CONTRASTIVE → distance to object Y (notably different)
   Strategies:
     a) Change target object to one at a significantly different distance
-
-**list** (4 templates):
-  POSITIVE → populated list  |  CONTRASTIVE → empty or notably different list
-  Strategies:
-    a) Swap <direction>/<place> to an area with different/no objects
-    b) Swap <position> (e.g., "ahead" → "behind") for different vehicle types
 
 --- 4.4 Contrastive Generation Constraints ---
 
@@ -452,32 +459,53 @@ provide the most factually grounded response possible.
   SECTION 7: ANSWER GENERATION RULES
 ========================================================================
 
-1. **y_or_n**: Strictly "yes" or "no".
-2. **categorical**: Exact category value from `expected_answers` if available,
-   or from the valid choices implied by the question.
-3. **distance**: Numerical estimate with unit (e.g., "approximately 7.4m").
-4. **open_ended**: Concise factual answer, 1-3 sentences.
-   Reference specific objects and spatial relationships.
-5. **num_count**: Integer count. Enumerate the objects counted.
-6. **list**: Comma-separated items, each grounded to specific objects.
-7. **numerical**: Specific number with unit (e.g., "approximately 2.3 seconds").
+All answers MUST be SHORT-ANSWER format unless the answer_type is open_ended.
+Short-answer = the minimal factual response with no extra elaboration.
+All detail and justification goes in the "reasoning" field, not in "answer".
+
+1. **y_or_n**: Strictly "yes" or "no". Nothing else.
+2. **mcq**: The correct option LETTER only (e.g., "B"). Nothing else.
+   - Construct exactly 5 options labeled (A) through (E): 1 correct + 4 plausible distractors.
+   - Draw distractors from `expected_answers` pool when available;
+     generate semantically consistent alternatives when the pool is too small.
+   - Include the full options list in `mcq_options`:
+     {"A": "option text", "B": "option text", "C": "option text",
+      "D": "option text", "E": "option text"}
+   - Randomize the position of the correct answer across pairs.
+3. **distance**: A single value with unit (e.g., "approximately 7.4m"). No sentence.
+4. **num_count**: A single integer (e.g., "3"). No sentence.
+5. **open_ended** (EXCEPTION — longer answers allowed):
+   Provide a descriptive answer in 2-4 sentences.
+   Reference specific objects and spatial relationships directly in the answer.
+   This is the ONLY answer_type where the answer field may contain full sentences.
 
 
 ========================================================================
   SECTION 8: REASONING REQUIREMENTS
 ========================================================================
 
-Your reasoning MUST:
-  - Reference specific OBJ IDs and their spatial data
-  - Cite which camera image(s) you used for visual verification
-  - Explain the logical chain from evidence to answer
-  - For spatial questions, show distance/position calculations
-  - Be concise but complete (3-5 sentences)
+Reasoning MUST be written as BULLET POINTS (not prose).
+Each bullet is one piece of evidence or one logical step.
+Use 3-6 bullets per answer.
 
-For CONTRASTIVE reasoning, additionally:
-  - State which placeholder(s) were changed and the value source
-  - Explain why the changed value produces a different answer
-  - Confirm the contrastive answer with visual/spatial evidence
+Format:
+  "reasoning": "- <bullet 1>\n- <bullet 2>\n- <bullet 3>"
+
+Required bullet content:
+  - At least one bullet referencing a specific OBJ ID and its spatial data
+  - At least one bullet citing which camera Image number(s) were used
+  - At least one bullet stating the logical conclusion from evidence to answer
+  - For spatial questions, include a bullet with distance/position data
+
+Example (y_or_n):
+  "reasoning": "- OBJ 18 (car) is 7.4m directly ahead, visible in Image 2 (Front)\n- OBJ 23 (car) is 12.5m ahead in the same lane, visible in Image 2\n- Both vehicles are in the ego-vehicle's current lane, confirming presence\n- Answer: yes"
+
+Example (mcq):
+  "reasoning": "- Image 2 (Front) shows a traffic light ahead of the ego-vehicle\n- The light displays a solid red circle, verified in Image 2\n- No green or yellow signal is visible for the ego-vehicle's lane\n- Correct option: (C) red"
+
+For CONTRASTIVE reasoning, additionally include:
+  - A bullet stating which placeholder(s) were changed and the value source
+  - A bullet explaining why the change produces a different answer
 
 
 ========================================================================
@@ -1013,7 +1041,7 @@ def build_verification_prompt(
 {
     "template_idx": <int>,
     "category": "<string>",
-    "answer_type": "<y_or_n|categorical|distance|open_ended|num_count|list|numerical>",
+    "answer_type": "<y_or_n|mcq|distance|open_ended|num_count>",
     "placeholder_classification": {
         "<tag>": "<entity|lexical>"
     },
@@ -1032,8 +1060,9 @@ def build_verification_prompt(
                     }
                 },
                 "instantiated_question": "<the pre-instantiated positive question>",
-                "answer": "<answer>",
-                "reasoning": "<3-5 sentences with OBJ IDs, camera refs, spatial data>",
+                "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
+                "answer": "<answer (option letter for mcq, e.g. 'B')>",
+                "reasoning": "- <bullet 1: OBJ ID + spatial data>\n- <bullet 2: camera ref>\n- <bullet 3: conclusion>",
                 "confidence": "<high|medium|low>",
                 "relevant_cameras": [<int>]
             },
@@ -1042,8 +1071,9 @@ def build_verification_prompt(
                 "contrastive_strategy": "<what was changed and why>",
                 "tag_mappings": { ... },
                 "instantiated_question": "<the pre-instantiated contrastive question>",
-                "answer": "<different answer>",
-                "reasoning": "<3-5 sentences>",
+                "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
+                "answer": "<different answer (different option letter for mcq)>",
+                "reasoning": "- <bullet 1>\n- <bullet 2>\n- <bullet 3>",
                 "confidence": "<high|medium|low>",
                 "relevant_cameras": [<int>]
             },
@@ -1052,8 +1082,9 @@ def build_verification_prompt(
                     "altered_placeholders": ["<tags changed>"],
                     "contrastive_strategy": "<what was changed and why>",
                     "instantiated_question": "<your proposed contrastive question>",
+                    "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
                     "answer": "<answer>",
-                    "reasoning": "<3-5 sentences>",
+                    "reasoning": "- <bullet 1>\n- <bullet 2>\n- <bullet 3>",
                     "confidence": "<high|medium|low>",
                     "relevant_cameras": [<int>]
                 }
@@ -1063,6 +1094,11 @@ def build_verification_prompt(
     ]
 }
 
+NOTES:
+- "mcq_options" is REQUIRED for mcq answer_type; omit for other types.
+- For mcq, "answer" must be the correct option LETTER (A/B/C/D/E).
+- Construct exactly 5 options: 1 correct + 4 plausible distractors.
+- Randomize the correct answer position across pairs.
 If contrastive is impossible: "contrastive": null, "contrastive_skip_reason": "<explanation>"
 """)
     parts.append("Output ONLY the JSON object, no additional text.")
@@ -1207,7 +1243,7 @@ def build_qa_generation_prompt(
 {
     "template_idx": <int>,
     "category": "<string>",
-    "answer_type": "<y_or_n|categorical|distance|open_ended|num_count|list|numerical>",
+    "answer_type": "<y_or_n|mcq|distance|open_ended|num_count>",
     "placeholder_classification": {
         "<tag>": "<entity|lexical>"
     },
@@ -1226,8 +1262,9 @@ def build_qa_generation_prompt(
                     }
                 },
                 "instantiated_question": "<final question>",
-                "answer": "<answer>",
-                "reasoning": "<3-5 sentences with OBJ IDs, camera refs, spatial data>",
+                "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
+                "answer": "<answer (option letter for mcq, e.g. 'B')>",
+                "reasoning": "- <bullet 1: OBJ ID + spatial data>\n- <bullet 2: camera ref>\n- <bullet 3: conclusion>",
                 "confidence": "<high|medium|low>",
                 "relevant_cameras": [<int>]
             },
@@ -1244,8 +1281,9 @@ def build_qa_generation_prompt(
                     }
                 },
                 "instantiated_question": "<altered question>",
-                "answer": "<different answer>",
-                "reasoning": "<3-5 sentences confirming the different answer>",
+                "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
+                "answer": "<different answer (different option letter for mcq)>",
+                "reasoning": "- <bullet 1>\n- <bullet 2: why answer differs>\n- <bullet 3>",
                 "confidence": "<high|medium|low>",
                 "relevant_cameras": [<int>]
             }
@@ -1259,6 +1297,11 @@ def build_qa_generation_prompt(
     ]
 }
 
+NOTES:
+- "mcq_options" is REQUIRED for mcq answer_type; omit for other types.
+- For mcq, "answer" must be the correct option LETTER (A/B/C/D/E).
+- Construct exactly 5 options: 1 correct + 4 plausible distractors.
+- Randomize the correct answer position across pairs.
 If contrastive is impossible for a specific pair:
     "contrastive": null,
     "contrastive_skip_reason": "<explanation>"

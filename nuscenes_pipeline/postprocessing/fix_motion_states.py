@@ -159,6 +159,9 @@ def main():
                         default=os.environ.get("NUSCENES_PKL_PATH", "nuscenes2d_ego_temporal_infos_val.pkl"))
     parser.add_argument('--data_root', type=str,
                         default=os.environ.get("NUSCENES_DATA_ROOT", "/home/yongjinjeon/datasets/nuscenes"))
+    parser.add_argument('--suffix', type=str, default='',
+                        help='Suffix appended to base filenames, e.g. "_no_contrast" '
+                             'to target sft_train_no_objlist_no_contrast.json')
     args = parser.parse_args()
 
     data_dir = args.data_dir
@@ -173,7 +176,7 @@ def main():
     print("Building image index...")
     img_index = build_image_index(loader)
 
-    for fname in ['sft_train_no_objlist.json', 'sft_val_no_objlist.json']:
+    for fname in [f'sft_train_no_objlist{args.suffix}.json', f'sft_val_no_objlist{args.suffix}.json']:
         fpath = os.path.join(data_dir, fname)
         if not os.path.exists(fpath):
             print(f"  {fname}: not found, skipping")
