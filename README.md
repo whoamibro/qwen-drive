@@ -170,7 +170,7 @@ python -m nuscenes_pipeline.modules.traffic_analysis \
 
 Per-sample JSON files saved to `{results_dir}/`:
 
-**Filename pattern:** `{idx:04d}_{scene_token}_{sample_token}_traffic_v8.json`
+**Filename pattern:** `{idx:04d}_{scene_token}_{sample_token}_traffic.json`
 
 **Contents:**
 - `system_prompt`: The system prompt with camera heading information
@@ -189,11 +189,18 @@ Selects applicable question templates from a question bank for each nuScenes sam
 
 ```bash
 # Via shell script (recommended defaults)
-bash nuscenes_pipeline/scripts/run_question_selector.sh [START_IDX] [END_IDX] [CATEGORY] [NUM_WORKERS]
+bash nuscenes_pipeline/scripts/run_question_selector.sh [START_IDX] [END_IDX] [CATEGORY] [NUM_WORKERS] [SAMPLING_RATIO]
+
+# Full dataset
+bash nuscenes_pipeline/scripts/run_question_selector.sh 0 6018 all 8
+
+# 5% random subset (recommended for testing)
+bash nuscenes_pipeline/scripts/run_question_selector.sh 0 6018 all 8 5
 
 # Via Python module
 python -m nuscenes_pipeline.modules.question_selector \
     --start_idx 0 --end_idx 6018 --category all --num_workers 8 \
+    --sampling_ratio 5 --seed 42 \
     --resize_factor 2 --filter_distance 50 --rear_filter 20 \
     --batch_size 5 --max_new_tokens 1024 \
     --risk_results_dir risk_assessment_results \
@@ -216,6 +223,8 @@ python -m nuscenes_pipeline.modules.question_selector \
 | `--traffic_results_dir` | str | `traffic_analysis_results` | Directory containing Stage 1B traffic analysis JSONs. Used as prior context for the `Traffic_Signs_and_Signals` category |
 | `--start_idx` | int | `0` | Starting sample index (inclusive) |
 | `--end_idx` | int | `6018` | Ending sample index (inclusive) |
+| `--sampling_ratio` | float | `None` | Percentage of samples to randomly select (e.g., `5` for 5%). When set, randomly samples this ratio from the `[start_idx, end_idx]` range |
+| `--seed` | int | `42` | Random seed for reproducible sampling |
 | `--category` | str | **required** | Question category to process. One of the 10 categories listed below, or `all` to process all categories |
 | `--filter_distance` | float | `20.0` | Maximum distance (meters) from ego to include 3D objects in scene analysis |
 | `--rear_filter` | float | `None` | Maximum distance (meters) for non-vehicle objects behind ego |
@@ -250,29 +259,38 @@ python -m nuscenes_pipeline.modules.question_selector \
 | Stage 1A results (`--risk_results_dir`) | Risk assessment JSONs from Stage 1A. Provides prior context for risk-related categories |
 | Stage 1B results (`--traffic_results_dir`) | Traffic analysis JSONs from Stage 1B. Provides prior context for traffic signal categories |
 
-**Question bank structure:**
+**Question bank structure (v3/v4 — ego-centric with sub-categories):**
 ```json
 {
+  "version": "v3_egocentric_static",
   "categories": [
     {
       "category": "Observation",
       "description": "...",
-      "templates": [
+      "sub_categories": [
         {
-          "template": "Are there any <object> <preposition> the <place>?",
-          "placeholders": {
-            "object": ["pedestrians", "vehicles", ...],
-            "place": ["lane", "roadway", ...],
-            "preposition": ["in", "on"]
-          },
-          "answer_type": "y_or_n",
-          "question_type": "observation"
+          "sub_category": "Ego-Path Presence Detection",
+          "templates": [
+            {
+              "template_id": "OBS-EP-001",
+              "template": "Are there any <object> in the ego-vehicle's <spatial_relation>?",
+              "placeholders": {
+                "object": ["pedestrians", "vehicles", ...],
+                "spatial_relation": ["current lane", "intended path", ...]
+              },
+              "answer_type": "y_or_n",
+              "question_type": "observation",
+              "ego_centric_note": "Spatial relation is ego-anchored; model must determine which camera views correspond to the specified zone."
+            }
+          ]
         }
       ]
     }
   ]
 }
 ```
+
+**Answer types:** `y_or_n` (151), `mcq` (68, 5-option A-E), `open_ended` (21), `num_count` (8), `distance` (3)
 
 ### Output
 
@@ -298,15 +316,23 @@ Takes question selector outputs (Stage 2), classifies each template's placeholde
 
 ```bash
 # Via shell script (recommended defaults)
-bash nuscenes_pipeline/scripts/run_answer_generator.sh [START_IDX] [END_IDX] [CATEGORY] [NUM_WORKERS]
+bash nuscenes_pipeline/scripts/run_answer_generator.sh [START_IDX] [END_IDX] [CATEGORY] [NUM_WORKERS] [MODE]
+
+# Full range mode (default)
+bash nuscenes_pipeline/scripts/run_answer_generator.sh 0 6018 all 8
+
+# Auto-discover mode (processes only samples that have Stage 2 outputs)
+bash nuscenes_pipeline/scripts/run_answer_generator.sh 0 6018 all 8 from_stage1
 
 # Via Python module
 python -m nuscenes_pipeline.modules.answer_generator \
-    --start_idx 0 --end_idx 6018 --category all --num_workers 8 \
+    --from_stage1 --category all --num_workers 8 \
     --resize_factor 2 --filter_distance 50 --rear_filter 20 \
     --max_new_tokens 16384 --max_pairs 3 \
-    --stage1_dir qa_outputs_stage1 \
-    --output_dir qa_outputs_stage2
+    --stage1_dir qa_outputs \
+    --output_dir qa_results \
+    --risk_results_dir risk_assessment_results \
+    --traffic_results_dir traffic_analysis_results
 ```
 
 ### Arguments
@@ -318,10 +344,13 @@ python -m nuscenes_pipeline.modules.answer_generator \
 | `--api_key` | str | `EMPTY` | API key for the vLLM server |
 | `--pkl_path` | str | env `NUSCENES_PKL_PATH` | Path to nuScenes pickle file |
 | `--question_bank` | str | env `QUESTION_BANK_PATH` | Path to question bank JSON (needed for original placeholder definitions and expected answer types) |
-| `--stage1_dir` | str | `qa_outputs_stage1` | Stage 2 (question selector) output directory. Contains the applicable question files per sample |
-| `--output_dir` | str | `qa_outputs_stage2` | Output directory for generated QA pairs |
-| `--start_idx` | int | `0` | Starting sample index (inclusive) |
-| `--end_idx` | int | `6018` | Ending sample index (inclusive) |
+| `--stage1_dir` | str | `qa_outputs` | Stage 2 (question selector) output directory. Supports both per-category subdirs (`qa_outputs/Observation/`) and all-category subdir (`qa_outputs/all/`) |
+| `--output_dir` | str | `qa_results` | Output directory for generated QA pairs |
+| `--risk_results_dir` | str | `risk_assessment_results` | Directory containing Stage 1A risk assessment JSONs. Prepended to prompt for `Dynamic_Agents_and_Risk_Assessment` templates |
+| `--traffic_results_dir` | str | `traffic_analysis_results` | Directory containing Stage 1B traffic analysis JSONs. Prepended to prompt for `Traffic_Signs_and_Signals` templates |
+| `--start_idx` | int | `0` | Starting sample index (inclusive). Ignored when `--from_stage1` is set |
+| `--end_idx` | int | `6018` | Ending sample index (inclusive). Ignored when `--from_stage1` is set |
+| `--from_stage1` | flag | `False` | Auto-discover sample indices from Stage 2 output files instead of using `start_idx`/`end_idx` range. Processes only samples that have applicable question results |
 | `--category` | str | `all` | Question category to process, or `all`. Same category choices as Stage 2 |
 | `--filter_distance` | float | `50.0` | Maximum distance (meters) from ego to include objects in scene context |
 | `--rear_filter` | float | `20.0` | Maximum distance (meters) for non-vehicle objects behind ego |
@@ -390,6 +419,29 @@ qwen-drive/
       run_traffic_analysis.sh         Shell script for Stage 1B
       run_question_selector.sh        Shell script for Stage 2
       run_answer_generator.sh         Shell script for Stage 3
+      show_prompts.py                 Prompt preview (prints system+user prompts without inference)
+```
+
+```
+  evaluation/
+    RealWorldQA/
+      run_realworldqa.py              Inference + evaluation
+      infer_instruct.sh               Inference shell script
+      eval_instruct.sh                Evaluation shell script
+    mmmu/
+      run_mmmu.py                     MMMU benchmark runner
+      infer_instruct.sh / eval_instruct.sh
+    MathVision/
+      run_mathv.py                    MathVision benchmark runner
+      infer_instruct.sh / eval_instruct.sh
+    ODinW-13/
+      run_odinw.py                    Object detection benchmark (COCO AP)
+      infer_instruct.sh / eval_instruct.sh
+    VideoMME/
+      run_videomme.py                 Video understanding benchmark
+      infer_instruct.sh / eval_instruct.sh
+  web_demo_mm.py                      Interactive Gradio web demo
+  train_nuscenes_qwen3vl.py           SFT training script (LoRA / full)
 ```
 
 ### Core Modules
@@ -548,8 +600,9 @@ Replaces OBJ ID references in QA answers with visual 2D bounding box description
 
 ```bash
 python -m nuscenes_pipeline.postprocessing.transform_obj_to_bbox \
-    --input_dir qa_results/Observation \
-    --output_dir sft_dataset/Observation \
+    --input_dir qa_results \
+    --output_dir sft_dataset \
+    --data_root ./data/nuscenes \
     --resize_factor 2
 ```
 
@@ -558,7 +611,7 @@ python -m nuscenes_pipeline.postprocessing.transform_obj_to_bbox \
 | `--input_dir` | str | `qa_results/Observation` | Directory with answer generator output (contains OBJ IDs) |
 | `--output_dir` | str | `sft_dataset/Observation` | Output directory for bbox-transformed results |
 | `--pkl_path` | str | env `NUSCENES_PKL_PATH` | Path to nuScenes pickle file |
-| `--data_root` | str | env `NUSCENES_DATA_ROOT` | nuScenes image root directory |
+| `--data_root` | str | env `NUSCENES_DATA_ROOT` | nuScenes data directory (where `samples/CAM_*/` images live) |
 | `--resize_factor` | int | `2` | Image resize factor (must match pipeline resize_factor) |
 
 **Transformation examples:**
@@ -571,8 +624,9 @@ Converts bbox-transformed QA results into Qwen3-VL SFT training format (3-turn c
 
 ```bash
 python -m nuscenes_pipeline.postprocessing.prepare_sft_dataset \
-    --qa_dir sft_dataset/Observation \
+    --qa_dir sft_dataset \
     --output_dir sft_dataset \
+    --data_root ./data/nuscenes \
     --val_size 40000
 ```
 
@@ -580,7 +634,7 @@ python -m nuscenes_pipeline.postprocessing.prepare_sft_dataset \
 |----------|------|---------|-------------|
 | `--qa_dir` | str | `sft_dataset/Observation` | Directory with bbox-transformed QA results |
 | `--pkl_path` | str | env `NUSCENES_PKL_PATH` | Path to nuScenes pickle file |
-| `--data_root` | str | env `NUSCENES_DATA_ROOT` | nuScenes image root directory |
+| `--data_root` | str | env `NUSCENES_DATA_ROOT` | nuScenes data directory (where `samples/CAM_*/` images live) |
 | `--output_dir` | str | `sft_dataset` | Output directory for SFT JSON files |
 | `--resize_factor` | int | `2` | Image resize factor |
 | `--val_size` | int | `40000` | Fixed number of validation samples (rest goes to train) |
@@ -621,14 +675,15 @@ Cross-references motion state claims in answers against ground truth velocity da
 
 ```bash
 python -m nuscenes_pipeline.postprocessing.fix_motion_states \
-    --data_dir sft_dataset
+    --data_dir sft_dataset \
+    --data_root ./data/nuscenes
 ```
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
 | `--data_dir` | str | `sft_dataset` | Directory containing `sft_train_no_objlist.json` and `sft_val_no_objlist.json` |
 | `--pkl_path` | str | env `NUSCENES_PKL_PATH` | Path to nuScenes pickle file |
-| `--data_root` | str | env `NUSCENES_DATA_ROOT` | nuScenes image root directory |
+| `--data_root` | str | env `NUSCENES_DATA_ROOT` | nuScenes data directory (where `samples/CAM_*/` images live) |
 
 **Phrase corrections** (22 patterns):
 - Motion → Stationary (velocity < 0.1 m/s): `"actively riding"` → `"stationary"`, `"in motion"` → `"stationary"`, etc.
@@ -651,28 +706,33 @@ python -m nuscenes_pipeline.postprocessing.count_qa_stats qa_results/sample_0_qa
 ```bash
 cd /path/to/qwen-drive
 
-export NUSCENES_PKL_PATH="/data/nuscenes/nuscenes2d_ego_temporal_infos_val.pkl"
-export NUSCENES_DATA_ROOT="/data/nuscenes"
-export QUESTION_BANK_PATH="/data/qa_dataset/question_bank.json"
+export NUSCENES_PKL_PATH="./data/nuscenes/nuscenes2d_ego_temporal_infos_val.pkl"
+export QUESTION_BANK_PATH="./data/question_bank_v4_static.json"
 
 # === Stage 1A & 1B (can run in parallel) ===
 bash nuscenes_pipeline/scripts/run_risk_assessment.sh 0 6018 8
 bash nuscenes_pipeline/scripts/run_traffic_analysis.sh 0 6018 8
 
 # === Stage 2: Question Selection ===
+# Full dataset
 bash nuscenes_pipeline/scripts/run_question_selector.sh 0 6018 all 8
+# Or 5% subset for testing
+bash nuscenes_pipeline/scripts/run_question_selector.sh 0 6018 all 8 5
 
 # === Stage 3: Answer Generation ===
+# Auto-discover mode (recommended when using sampled subset)
+bash nuscenes_pipeline/scripts/run_answer_generator.sh 0 6018 all 8 from_stage1
+# Or full range mode
 bash nuscenes_pipeline/scripts/run_answer_generator.sh 0 6018 all 8
 
 # === Post-Processing ===
 # Step 1: OBJ → bbox transformation
 python -m nuscenes_pipeline.postprocessing.transform_obj_to_bbox \
-    --input_dir qa_results/Observation --output_dir sft_dataset/Observation
+    --input_dir qa_results --output_dir sft_dataset --data_root ./data/nuscenes
 
 # Step 2: Build SFT dataset
 python -m nuscenes_pipeline.postprocessing.prepare_sft_dataset \
-    --qa_dir sft_dataset/Observation --output_dir sft_dataset --val_size 40000
+    --qa_dir sft_dataset --output_dir sft_dataset --data_root ./data/nuscenes
 
 # Step 3: Cleanse leaked OBJ references
 python -m nuscenes_pipeline.postprocessing.cleanse_obj_references \
@@ -681,7 +741,8 @@ python -m nuscenes_pipeline.postprocessing.cleanse_obj_references \
     --input sft_dataset/sft_val_no_objlist.json
 
 # Step 4: Fix motion state contradictions
-python -m nuscenes_pipeline.postprocessing.fix_motion_states --data_dir sft_dataset
+python -m nuscenes_pipeline.postprocessing.fix_motion_states \
+    --data_dir sft_dataset --data_root ./data/nuscenes
 ```
 
 ---
@@ -738,6 +799,129 @@ NPROC_PER_NODE=8 bash qwen-vl-finetune/scripts/run_nuscenes_full.sh
 | `--data_flatten` | bool | `False` | Pack sequences for efficiency (full fine-tune only) |
 | `--max_pixels` | int | `50176` | Max image pixels |
 | `--min_pixels` | int | `784` | Min image pixels |
+
+---
+
+## Evaluation & Benchmarks
+
+After SFT training, evaluate the fine-tuned model on multiple benchmarks. Each benchmark has an `infer` step (run vLLM inference) and an `eval` step (compute metrics).
+
+### Available Benchmarks
+
+| Benchmark | Type | Metric | Description |
+|-----------|------|--------|-------------|
+| **RealWorldQA** | Image QA | Accuracy | Real-world visual question answering |
+| **MMMU** | Image QA | Accuracy (A-D MCQ) | Multi-discipline multimodal understanding |
+| **MathVision** | Image QA | Accuracy | Mathematical visual reasoning |
+| **ODinW-13** | Object Detection | COCO AP | Object detection in the wild (13 domains) |
+| **VideoMME** | Video QA | Accuracy | Video understanding (short/long duration) |
+
+### How to Run
+
+Each benchmark lives in `evaluation/<benchmark>/` with standardized scripts:
+
+```bash
+cd evaluation/<benchmark>
+
+# Step 1: Inference — runs vLLM on the benchmark dataset
+bash infer_instruct.sh
+
+# Step 2: Evaluation — computes metrics
+bash eval_instruct.sh
+```
+
+**Before running**, edit the shell scripts to set your paths:
+- `--model-path`: path to your SFT fine-tuned model checkpoint
+- `--data-dir`: path to the benchmark dataset
+
+### Example: RealWorldQA
+
+```bash
+cd evaluation/RealWorldQA
+
+# Inference
+python run_realworldqa.py infer \
+    --model-path /path/to/your/sft-checkpoint \
+    --dataset RealWorldQA \
+    --data-dir /path/to/realworldqa_data \
+    --output-file results/RealWorldQA_results.jsonl \
+    --tensor-parallel-size 1 \
+    --gpu-memory-utilization 0.9 \
+    --max-new-tokens 32768 \
+    --temperature 0.7 --top-p 0.8 --top-k 20
+
+# Evaluation
+python run_realworldqa.py eval \
+    --data-dir /path/to/realworldqa_data \
+    --input-file results/RealWorldQA_results.jsonl \
+    --output-file results/RealWorldQA_evaluation.csv \
+    --dataset RealWorldQA \
+    --eval-model gpt-3.5-turbo-0125 --api-type dash --nproc 4
+```
+
+### Example: MMMU
+
+```bash
+cd evaluation/mmmu
+
+python run_mmmu.py infer \
+    --model-path /path/to/your/sft-checkpoint \
+    --data-dir /path/to/mmmu_data \
+    --dataset MMMU_DEV_VAL \
+    --output-file results/mmmu_dev_val_predictions.jsonl \
+    --max-new-tokens 32768 \
+    --temperature 0.7 --top-p 0.8 --top-k 20
+
+python run_mmmu.py eval \
+    --data-dir /path/to/mmmu_data \
+    --input-file results/mmmu_dev_val_predictions.jsonl \
+    --output-file results/mmmu_dev_val_eval_results.csv \
+    --dataset MMMU_DEV_VAL \
+    --eval-model gpt-3.5-turbo-0125 --api-type dash --nproc 16
+```
+
+### Common Inference Arguments
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--model-path` | str | — | Path to fine-tuned model checkpoint or HuggingFace model ID |
+| `--data-dir` | str | — | Path to benchmark dataset |
+| `--output-file` | str | — | Output JSONL file for predictions |
+| `--tensor-parallel-size` | int | `1` | Number of GPUs for tensor parallelism |
+| `--gpu-memory-utilization` | float | `0.9` | GPU memory fraction for vLLM |
+| `--max-model-len` | int | `128000` | Maximum model context length |
+| `--max-new-tokens` | int | `32768` | Maximum tokens to generate |
+| `--temperature` | float | `0.7` | Sampling temperature |
+| `--top-p` | float | `0.8` | Top-p (nucleus) sampling |
+| `--top-k` | int | `20` | Top-k sampling |
+
+### Web Demo
+
+Interactive Gradio web interface for testing the fine-tuned model with custom images and questions:
+
+```bash
+# Using HuggingFace backend
+python web_demo_mm.py --backend hf \
+    --checkpoint-path /path/to/your/sft-checkpoint \
+    --server-port 7860
+
+# Using vLLM backend (faster)
+python web_demo_mm.py --backend vllm \
+    --checkpoint-path /path/to/your/sft-checkpoint \
+    --server-port 7860 \
+    --tensor-parallel-size 1 \
+    --gpu-memory-utilization 0.7
+```
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--checkpoint-path`, `-c` | str | `Qwen/Qwen3-VL-235B-A22B-Instruct` | Model checkpoint path |
+| `--backend` | str | `hf` | Backend: `hf` (HuggingFace) or `vllm` |
+| `--server-port` | int | `7860` | Web server port |
+| `--server-name` | str | `127.0.0.1` | Web server host |
+| `--flash-attn2` | flag | `False` | Enable Flash Attention 2 (HF backend) |
+| `--tensor-parallel-size` | int | `1` | GPU count for tensor parallelism (vLLM backend) |
+| `--gpu-memory-utilization` | float | `0.7` | GPU memory fraction (vLLM backend) |
 
 ---
 
