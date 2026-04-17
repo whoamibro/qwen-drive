@@ -401,6 +401,7 @@ qwen-drive/
       question_selector.py            Stage 2  - Template selection from question bank
       answer_generator.py             Stage 3  - Contrastive QA pair generation
       sft_prompt_builder.py           SFT training prompt construction
+      sft_model_tester.py             Qualitative inference test for SFT-trained LoRA model
     visualization/
       __init__.py
       bev_generator.py                BEV visualization with ego, objects, velocities
@@ -419,6 +420,7 @@ qwen-drive/
       run_traffic_analysis.sh         Shell script for Stage 1B
       run_question_selector.sh        Shell script for Stage 2
       run_answer_generator.sh         Shell script for Stage 3
+      run_sft_model_tester.sh         Shell script for SFT model inference test
       show_prompts.py                 Prompt preview (prints system+user prompts without inference)
 ```
 
@@ -799,6 +801,88 @@ NPROC_PER_NODE=8 bash qwen-vl-finetune/scripts/run_nuscenes_full.sh
 | `--data_flatten` | bool | `False` | Pack sequences for efficiency (full fine-tune only) |
 | `--max_pixels` | int | `50176` | Max image pixels |
 | `--min_pixels` | int | `784` | Min image pixels |
+
+---
+
+## SFT Model Testing (Qualitative Inference)
+
+Runs inference on a LoRA-fine-tuned Qwen3-VL-8B model using the **same prompt structure as training** (no-objlist variant: 6 surround-view images + ego status + task question). Saves results in the same format as `sft_train_no_objlist.json` so they can be loaded into the `qa_visualizer` dashboard for visual side-by-side comparison with ground truth answers.
+
+### How to Run
+
+```bash
+# Via shell script (recommended)
+bash nuscenes_pipeline/scripts/run_sft_model_tester.sh [MODE] [START] [END]
+
+# Examples
+bash nuscenes_pipeline/scripts/run_sft_model_tester.sh val 0 9       # Compare against val GT (indices 0..9)
+bash nuscenes_pipeline/scripts/run_sft_model_tester.sh range 0 20    # Raw sample indices 0..20
+
+# Via Python module
+python -m nuscenes_pipeline.modules.sft_model_tester \
+    --from_val --val_indices 0 1 2 3 4 5 \
+    --base_model ckpts/qwen3_vl_8b_instruct \
+    --lora_path output_nuscenes_lora_no_objlist_cleansing_qads/checkpoint-5500 \
+    --output_dir /path/to/sft_dataset
+
+# Custom question on arbitrary samples
+python -m nuscenes_pipeline.modules.sft_model_tester \
+    --sample_indices 0 10 50 100 \
+    --question "Are there any pedestrians on the sidewalk?"
+
+# Override paths via env vars
+LORA_PATH=output_nuscenes_lora_no_objlist_cleansing_qads/checkpoint-11000 \
+    bash nuscenes_pipeline/scripts/run_sft_model_tester.sh val 0 20
+```
+
+### Arguments
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--base_model` | str | `ckpts/qwen3_vl_8b_instruct` | Path to base Qwen3-VL-8B model |
+| `--lora_path` | str | `output_nuscenes_lora_no_objlist_cleansing_qads/checkpoint-5500` | Path to LoRA adapter checkpoint (merged at load time) |
+| `--pkl_path` | str | `NUSCENES_PKL_PATH` | Path to nuScenes pickle file |
+| `--sample_indices` | int+ | `None` | Specific sample indices to test (for ad-hoc inference) |
+| `--start_idx` | int | `None` | Start index for range-based processing |
+| `--end_idx` | int | `None` | End index for range-based processing |
+| `--from_val` | flag | `False` | Load questions from the val set so each result can be compared against ground truth |
+| `--val_path` | str | `sft_dataset/sft_val_no_objlist.json` | Path to val set JSON (used with `--from_val`) |
+| `--val_indices` | int+ | `None` | Specific val set indices to test (used with `--from_val`) |
+| `--question` | str | `None` | Custom question. When set, overrides val questions for the specified samples |
+| `--resize_factor` | int | `2` | Image downscale factor (must match training) |
+| `--max_new_tokens` | int | `2048` | Maximum tokens the model generates per sample |
+| `--output_dir` | str | `sft_dataset` | Directory for output JSON |
+| `--output_name` | str | `sft_test_<timestamp>.json` | Output filename |
+
+### Input
+
+| Input | Description |
+|-------|-------------|
+| Base model | Qwen3-VL-8B checkpoint (e.g., from `ckpts/qwen3_vl_8b_instruct`) |
+| LoRA adapter | Output of the SFT training run (e.g., `output_nuscenes_lora_no_objlist_cleansing_qads/checkpoint-5500`). Merged into the base model at load time via `PeftModel.merge_and_unload()` |
+| nuScenes pickle file | Same pickle used throughout the pipeline |
+| Val JSON (optional) | `sft_val_no_objlist.json` when `--from_val` is set, providing GT answers for comparison |
+
+### Output
+
+One JSON file per run saved to `{output_dir}/{output_name}` in the **same format as `sft_train_no_objlist.json`**:
+
+```json
+[
+  {
+    "image": ["...CAM_FRONT_LEFT.jpg", "...CAM_FRONT.jpg", ...],
+    "conversations": [
+      {"from": "system", "value": "You are an autonomous driving analysis agent..."},
+      {"from": "human",  "value": "=== Image 1: ... === <image> ... TASK: ..."},
+      {"from": "gpt",    "value": "<model prediction>"},
+      {"from": "gt",     "value": "<ground truth>"}   // only when --from_val
+    ]
+  },
+  ...
+]
+```
+
+The `"gt"` turn is only added in `--from_val` mode. Because the format matches the training data, the output file can be loaded directly into `nuscenes_pipeline.visualization.qa_visualizer` for visual inspection alongside the 6-view images and BEV overlay.
 
 ---
 
