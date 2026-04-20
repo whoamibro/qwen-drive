@@ -1,16 +1,17 @@
 #!/bin/bash
 
 ################################################################################
-# Traffic Analysis - Stage 1B
+# Traffic Sign Extraction - Stage 1C
 #
-# Analyzes traffic signal states per nuScenes sample.
-# Uses vLLM-served model via OpenAI-compatible API with multiprocessing.
+# Extracts and classifies traffic signs visible in 6-view camera images.
+# Runs parallel to Stage 1B (signal analysis). Uses vLLM-served model via
+# OpenAI-compatible API with multiprocessing.
 #
 # Prerequisites:
 #   vllm serve Qwen/Qwen3-VL-235B-A22B-Instruct --tensor-parallel-size 8
 #
 # Output directories:
-#   traffic_analysis_results/      - JSON result files
+#   traffic_sign_results/              - JSON result files (suffix: _sign.json)
 ################################################################################
 
 # Navigate to project root
@@ -23,13 +24,13 @@ END_IDX=${2:-6018}
 NUM_WORKERS=${3:-8}
 
 # Output directories
-RESULTS_DIR="traffic_analysis_results"
+RESULTS_DIR="traffic_sign_results"
 
-# Question text
-QUESTION="Identify all traffic signals visible in the images and determine their current state (red, yellow, or green). For each signal, specify which camera it appears in, its orientation relative to ego vehicle's travel direction, and whether it governs ego vehicle's lane."
+# Question text (ego-relevance-focused)
+QUESTION="Extract all traffic signs visible across the 6 camera views. For each sign, report its category (regulatory/warning/guide), text or symbol, orientation, mount location, and whether it applies to the ego-vehicle per the Sign Ego-Relevance Test."
 
 echo "================================================================================"
-echo "Traffic Analysis - Stage 1B"
+echo "Traffic Sign Extraction - Stage 1C"
 echo "================================================================================"
 echo "Start Index: $START_IDX"
 echo "End Index: $END_IDX"
@@ -42,7 +43,7 @@ echo "==========================================================================
 echo ""
 
 # Run the module
-python3 -m nuscenes_pipeline.modules.traffic_analysis \
+python3 -m nuscenes_pipeline.modules.traffic_sign_extraction \
     --start_idx $START_IDX \
     --end_idx $END_IDX \
     --num_workers $NUM_WORKERS \
@@ -54,6 +55,6 @@ python3 -m nuscenes_pipeline.modules.traffic_analysis \
 
 echo ""
 echo "================================================================================"
-echo "Traffic analysis complete!"
+echo "Traffic sign extraction complete!"
 echo "  Results:  $RESULTS_DIR/"
 echo "================================================================================"

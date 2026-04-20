@@ -13,19 +13,19 @@ Prerequisites:
 
 Usage:
     # Single sample traffic analysis
-    python -m nuscenes_pipeline.modules.traffic_analysis --sample_indices 0 10 20
+    python -m nuscenes_pipeline.modules.traffic_signal_analysis --sample_indices 0 10 20
 
     # With image resizing
-    python -m nuscenes_pipeline.modules.traffic_analysis --sample_indices 0 --resize_factor 4
+    python -m nuscenes_pipeline.modules.traffic_signal_analysis --sample_indices 0 --resize_factor 4
 
     # Process range of samples
-    python -m nuscenes_pipeline.modules.traffic_analysis --start_idx 0 --end_idx 100
+    python -m nuscenes_pipeline.modules.traffic_signal_analysis --start_idx 0 --end_idx 100
 
     # With global coordinates
-    python -m nuscenes_pipeline.modules.traffic_analysis --sample_indices 0 --to_global
+    python -m nuscenes_pipeline.modules.traffic_signal_analysis --sample_indices 0 --to_global
 
     # Custom number of workers (default: 8)
-    python -m nuscenes_pipeline.modules.traffic_analysis --start_idx 0 --end_idx 100 --num_workers 4
+    python -m nuscenes_pipeline.modules.traffic_signal_analysis --start_idx 0 --end_idx 100 --num_workers 4
 """
 
 import os
@@ -135,22 +135,15 @@ def get_camera_heading_info(sample, loader: NuScenesDataLoader) -> str:
     return "\n".join(lines)
 
 
-def create_traffic_analysis_prompt_v8(sample, loader: NuScenesDataLoader, user_question: str,
-                                       use_global_coords: bool = False) -> tuple:
+def create_traffic_signal_analysis_prompt(sample, loader: NuScenesDataLoader, user_question: str,
+                                           use_global_coords: bool = False) -> tuple:
     """
-    Create an ENHANCED prompt for traffic signal analysis (V8).
+    Create the prompt for traffic signal analysis.
 
-    Key improvements over v7:
-    - Replaced Image 2 priority rule with CORE PRINCIPLE: orientation + road alignment
-    - Enhanced B2 with Road Alignment Check (KEY TEST)
-    - Replaced MANDATORY RULE with CORE PRINCIPLE (orientation + traffic flow) for all phases
-    - Step 3 applies Traffic Flow Test per signal with large vehicle check per signal
-    - Step 5 uses CANDIDATE collection instead of decision tree
-    - Output uses [SIGNAL-SCAN] with Traffic Flow Test results per signal
-    - PRE-ANALYSIS REMINDER updated for Traffic Flow Test approach
-    - D1 restructured around Traffic Flow Test
-    - D2 restructured: 13 rules with Traffic Flow Test as primary
-    - Confidence levels updated for Traffic Flow Test
+    Uses the Traffic Flow Test approach: a signal governs ego's lane only if it
+    faces ego's approach direction AND is not aligned with the crossing road's
+    traffic flow. Output includes [SIGNAL-SCAN] with per-signal Traffic Flow Test
+    results and large-vehicle checks.
 
     Args:
         sample: NuScenesSample object
@@ -218,7 +211,7 @@ def create_traffic_analysis_prompt_v8(sample, loader: NuScenesDataLoader, user_q
     # Simplified system prompt header
     system_prompt_header = "You are a driving expert agent, and should answer the question at the viewpoint of a driver."
 
-    # Core principle block (v8 - Traffic Flow Test based)
+    # Core principle block (Traffic Flow Test based)
     core_principle = """
 # CORE PRINCIPLE — READ BEFORE ALL ANALYSIS
 **A traffic signal governs ego's lane ONLY if it faces ego's approach direction AND is NOT aligned with the crossing road's traffic flow.**
@@ -249,7 +242,7 @@ Look at the vehicles near a signal. Which direction are they traveling?
 **Large vehicles (buses, trucks) on the crossing road do NOT change signal selection.** A bus in Image 1 or Image 3 is on the CROSSING road. The signal near that bus governs the crossing road. Do NOT let a large vehicle's visual prominence draw your attention toward that image's signals.
 """
 
-    # Traffic Signal System Guide (V8 - Traffic Flow Test based)
+    # Traffic Signal System Guide (Traffic Flow Test based)
     traffic_signal_guide = """
 ---
 
@@ -488,7 +481,7 @@ Response in English."""
 
 ---"""
 
-    # User prompt - Traffic Signal Analysis Task V8 (Traffic Flow Test)
+    # User prompt - Traffic Signal Analysis Task (Traffic Flow Test)
     user_prompt = f"""# TRAFFIC SIGNAL ANALYSIS TASK
 ---
 ## INPUT
@@ -726,7 +719,7 @@ def _worker_analyze_sample(
         sample = loader.get_sample(sample_idx)
 
         # Generate prompt
-        system_prompt, user_question_text = create_traffic_analysis_prompt_v8(
+        system_prompt, user_question_text = create_traffic_signal_analysis_prompt(
             sample, loader, "", use_global_coords=use_global_coords
         )
 
@@ -773,7 +766,7 @@ def _worker_analyze_sample(
 
         # Create result
         result = {
-            "prompt_type": "traffic_analysis_v8_enhanced_vllm_mp",
+            "prompt_type": "traffic_signal_analysis_vllm_mp",
             "sample_idx": sample_idx,
             "token": sample.token,
             "scene_token": sample.scene_token,
@@ -788,7 +781,7 @@ def _worker_analyze_sample(
         }
 
         # Save result
-        result_filename = f"{sample_idx:04d}_{sample.scene_token[:16]}_{sample.token[:16]}_traffic_v8.json"
+        result_filename = f"{sample_idx:04d}_{sample.scene_token[:16]}_{sample.token[:16]}_traffic_signal.json"
         result_path = os.path.join(results_dir, result_filename)
         with open(result_path, "w") as f:
             json.dump(result, f, indent=2, ensure_ascii=False)
@@ -812,9 +805,9 @@ def _worker_wrapper(args):
     return _worker_analyze_sample(*args)
 
 
-class TrafficSignalAnalyzerV8VLLMMultiprocessing:
+class TrafficSignalAnalyzerVLLMMultiprocessing:
     """
-    Traffic Signal Analyzer V8 for nuScenes dataset using vLLM-served Qwen3-VL model.
+    Traffic Signal Analyzer for nuScenes dataset using vLLM-served Qwen3-VL model.
     Uses multiprocessing with tqdm progress bar to send multiple API calls in parallel.
     Uses CONDITIONAL output format with signal-required branching.
     """
@@ -831,10 +824,10 @@ class TrafficSignalAnalyzerV8VLLMMultiprocessing:
         viz_output_dir: str = "traffic_visualizations",
         use_global_coords: bool = False,
         num_workers: int = 8,
-        results_dir: str = "traffic_analysis_results",
+        results_dir: str = "traffic_signal_analysis_results",
     ):
         """
-        Initialize the Traffic Signal Analyzer V8 (vLLM Multiprocessing version).
+        Initialize the Traffic Signal Analyzer (vLLM Multiprocessing version).
 
         Args:
             model_name: Model name served by vLLM
@@ -850,7 +843,7 @@ class TrafficSignalAnalyzerV8VLLMMultiprocessing:
         """
         print("=" * 80)
         print(
-            "Initializing Traffic Signal Analyzer V8 (vLLM Multiprocessing - Traffic Flow Test)"
+            "Initializing Traffic Signal Analyzer (vLLM Multiprocessing - Traffic Flow Test)"
         )
         print("=" * 80)
 
@@ -964,7 +957,7 @@ class TrafficSignalAnalyzerV8VLLMMultiprocessing:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Traffic Signal Analysis V8 using vLLM-served Qwen3-VL (Multiprocessing, Traffic Flow Test)"
+        description="Traffic Signal Analysis using vLLM-served Qwen3-VL (Multiprocessing, Traffic Flow Test)"
     )
 
     # Model and API settings
@@ -1056,7 +1049,7 @@ def main():
     parser.add_argument(
         "--results_dir",
         type=str,
-        default="traffic_analysis_results",
+        default="traffic_signal_analysis_results",
         help="Directory to save result JSON files",
     )
 
@@ -1079,7 +1072,7 @@ def main():
         sample_indices = [0]
 
     # Initialize analyzer
-    analyzer = TrafficSignalAnalyzerV8VLLMMultiprocessing(
+    analyzer = TrafficSignalAnalyzerVLLMMultiprocessing(
         model_name=args.model_name,
         api_base=args.api_base,
         api_key=args.api_key,
@@ -1094,7 +1087,7 @@ def main():
     )
 
     # Run analysis
-    print(f"\nAnalyzing {len(sample_indices)} samples (V8 - Traffic Flow Test, vLLM, Multiprocessing x{args.num_workers})...")
+    print(f"\nAnalyzing {len(sample_indices)} samples (Traffic Flow Test, vLLM, Multiprocessing x{args.num_workers})...")
     print(f"Question: {args.question}\n")
 
     total_start = time.time()
@@ -1109,7 +1102,7 @@ def main():
     ]) if successful > 0 else 0
 
     print(f"\n{'='*80}")
-    print("Traffic Signal Analysis V8 (vLLM Multiprocessing) Complete")
+    print("Traffic Signal Analysis (vLLM Multiprocessing) Complete")
     print(f"{'='*80}")
     print(f"  Total samples: {len(sample_indices)}")
     print(f"  Successful: {successful}")

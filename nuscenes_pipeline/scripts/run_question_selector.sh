@@ -31,7 +31,7 @@ SAMPLING_RATIO=${5:-""}
 OUTPUT_DIR="qa_outputs/$CATEGORY"
 LOG_DIR="question_selector_logs"
 RISK_RESULTS_DIR="risk_assessment_results"
-TRAFFIC_RESULTS_DIR="traffic_analysis_results"
+TRAFFIC_RESULTS_DIR="traffic_signal_analysis_results"
 
 echo "================================================================================"
 echo "Question Selector - Stage 2"

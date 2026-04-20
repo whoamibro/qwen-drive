@@ -64,7 +64,7 @@ def main():
                         default="risk_assessment_results",
                         help="Directory containing risk assessment results")
     parser.add_argument("--traffic_results_dir", type=str,
-                        default="traffic_analysis_results",
+                        default="traffic_signal_analysis_results",
                         help="Directory containing traffic analysis results")
     args = parser.parse_args()
 

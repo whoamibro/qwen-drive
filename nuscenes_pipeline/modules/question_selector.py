@@ -85,8 +85,8 @@ def load_risk_assessment_response(risk_results_dir: str, sample_idx: int) -> Opt
 
 
 def load_traffic_analysis_response(traffic_results_dir: str, sample_idx: int) -> Optional[str]:
-    """Load traffic analysis response. Files: {idx:04d}_*_traffic.json"""
-    return _load_prior_analysis_response(traffic_results_dir, sample_idx, "traffic")
+    """Load traffic signal analysis response. Files: {idx:04d}_*_traffic_signal.json"""
+    return _load_prior_analysis_response(traffic_results_dir, sample_idx, "traffic_signal")
 
 
 def image_to_base64_data_uri(img_pil: Image.Image, format: str = "JPEG") -> str:
@@ -548,7 +548,7 @@ def main():
     )
     parser.add_argument(
         "--traffic_results_dir", type=str,
-        default="traffic_analysis_results",
+        default="traffic_signal_analysis_results",
         help="Directory containing traffic analysis result JSONs (for Traffic_Signs_and_Signals category)",
     )
 

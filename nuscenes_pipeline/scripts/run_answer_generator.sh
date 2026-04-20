@@ -33,7 +33,7 @@ STAGE1_DIR="qa_outputs"
 OUTPUT_DIR="qa_results"
 LOG_DIR="answer_generator_logs"
 RISK_RESULTS_DIR="risk_assessment_results"
-TRAFFIC_RESULTS_DIR="traffic_analysis_results"
+TRAFFIC_RESULTS_DIR="traffic_signal_analysis_results"
 
 echo "================================================================================"
 echo "Answer Generator - Stage 3"
