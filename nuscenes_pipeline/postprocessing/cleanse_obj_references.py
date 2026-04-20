@@ -10,11 +10,12 @@ Round 1 — Leaked OBJ refs (direct OBJ N patterns):
 
 Round 2 — Meta-references (sentence-level removal):
   Removes entire sentences that reference the object list system, e.g. sentences
-  containing: "spatial data", "OBJ ID", "object list", "does not list",
-  "pre-computed", "prior knowledge".
+  containing: "spatial data", "OBJ ID" / "OBJ IDs", "object list" / "object lists",
+  "does not list", "pre-computed", "prior knowledge".
 
 Round 3 — Remaining edge cases (phrase-level replacement):
-  - "no object with a 3D position or OBJ ID" -> "no object"
+  - "no object with a 3D position or OBJ ID(s)" -> "no object"
+  - "(the) OBJ ID(s) (and their descriptions)" -> "" (removed)
   - "spatial database" / "spatial dataset" / "spatial data" -> "scene"
   - "object list" / "object lists" -> "scene"
 
@@ -86,8 +87,11 @@ def round1_clean_obj_refs(text: str) -> tuple[str, int]:
 
 _META_KEYWORDS = [
     'spatial data',
+    'OBJ IDs',       # plural first (longest match priority)
+    'OBJ ids',
     'OBJ ID',
     'OBJ id',
+    'object lists',  # plural
     'object list',
     'does not list',
     'pre-computed',
@@ -126,8 +130,9 @@ def round2_remove_meta_sentences(text: str) -> tuple[str, int]:
 
 _PHRASE_REPLACEMENTS = [
     # Full phrase replacements (order matters: most specific first)
-    (re.compile(r'no object with a 3D position or OBJ ID', re.IGNORECASE), 'no object'),
-    (re.compile(r'no object with an? OBJ ID', re.IGNORECASE), 'no object'),
+    (re.compile(r'no objects? with (?:a 3D position or )?OBJ IDs?', re.IGNORECASE), 'no object'),
+    (re.compile(r'no objects? with an? OBJ IDs?', re.IGNORECASE), 'no object'),
+    (re.compile(r'(?:the\s+)?OBJ IDs?(?:\s+and\s+(?:their\s+)?descriptions?)?', re.IGNORECASE), ''),
     (re.compile(r'spatial database', re.IGNORECASE), 'scene'),
     (re.compile(r'spatial dataset', re.IGNORECASE), 'scene'),
     (re.compile(r'spatial data', re.IGNORECASE), 'scene'),
