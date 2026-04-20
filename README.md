@@ -425,24 +425,6 @@ qwen-drive/
 ```
 
 ```
-  evaluation/
-    RealWorldQA/
-      run_realworldqa.py              Inference + evaluation
-      infer_instruct.sh               Inference shell script
-      eval_instruct.sh                Evaluation shell script
-    mmmu/
-      run_mmmu.py                     MMMU benchmark runner
-      infer_instruct.sh / eval_instruct.sh
-    MathVision/
-      run_mathv.py                    MathVision benchmark runner
-      infer_instruct.sh / eval_instruct.sh
-    ODinW-13/
-      run_odinw.py                    Object detection benchmark (COCO AP)
-      infer_instruct.sh / eval_instruct.sh
-    VideoMME/
-      run_videomme.py                 Video understanding benchmark
-      infer_instruct.sh / eval_instruct.sh
-  web_demo_mm.py                      Interactive Gradio web demo
   train_nuscenes_qwen3vl.py           SFT training script (LoRA / full)
 ```
 
@@ -888,124 +870,83 @@ The `"gt"` turn is only added in `--from_val` mode. Because the format matches t
 
 ## Evaluation & Benchmarks
 
-After SFT training, evaluate the fine-tuned model on multiple benchmarks. Each benchmark has an `infer` step (run vLLM inference) and an `eval` step (compute metrics).
+Evaluation of the SFT-tuned Qwen3-VL model is performed **on the in-house nuScenes VLM dataset built by this pipeline** (not on general-purpose VLM benchmarks). The goal is to verify that the fine-tuned model answers autonomous-driving questions grounded in the 6-view surround images, ego state, and scene context produced by Stages 1–3.
 
-### Available Benchmarks
+### Evaluation Workflow
 
-| Benchmark | Type | Metric | Description |
-|-----------|------|--------|-------------|
-| **RealWorldQA** | Image QA | Accuracy | Real-world visual question answering |
-| **MMMU** | Image QA | Accuracy (A-D MCQ) | Multi-discipline multimodal understanding |
-| **MathVision** | Image QA | Accuracy | Mathematical visual reasoning |
-| **ODinW-13** | Object Detection | COCO AP | Object detection in the wild (13 domains) |
-| **VideoMME** | Video QA | Accuracy | Video understanding (short/long duration) |
-
-### How to Run
-
-Each benchmark lives in `evaluation/<benchmark>/` with standardized scripts:
-
-```bash
-cd evaluation/<benchmark>
-
-# Step 1: Inference — runs vLLM on the benchmark dataset
-bash infer_instruct.sh
-
-# Step 2: Evaluation — computes metrics
-bash eval_instruct.sh
+```
+        SFT-tuned Qwen3-VL + LoRA checkpoint
+                        |
+                        v
+[Step 1] sft_model_tester.py        Run inference on val set using the
+                                     SAME prompt format as training
+                        |
+                        v
+sft_test_<timestamp>.json            Predictions + GT answers in the
+                                     sft_train_no_objlist.json schema
+                        |
+                        v
+[Step 2] qa_visualizer.py            Flask dashboard: side-by-side
+                                     6-view images + BEV + prediction vs GT
 ```
 
-**Before running**, edit the shell scripts to set your paths:
-- `--model-path`: path to your SFT fine-tuned model checkpoint
-- `--data-dir`: path to the benchmark dataset
+Step 1 produces model predictions aligned with the val-set GT answers; Step 2 loads that JSON into the QA visualizer so predictions can be inspected visually against the 6-view panorama and BEV overlay.
 
-### Example: RealWorldQA
+### Step 1: Run Inference on the Val Set
 
-```bash
-cd evaluation/RealWorldQA
-
-# Inference
-python run_realworldqa.py infer \
-    --model-path /path/to/your/sft-checkpoint \
-    --dataset RealWorldQA \
-    --data-dir /path/to/realworldqa_data \
-    --output-file results/RealWorldQA_results.jsonl \
-    --tensor-parallel-size 1 \
-    --gpu-memory-utilization 0.9 \
-    --max-new-tokens 32768 \
-    --temperature 0.7 --top-p 0.8 --top-k 20
-
-# Evaluation
-python run_realworldqa.py eval \
-    --data-dir /path/to/realworldqa_data \
-    --input-file results/RealWorldQA_results.jsonl \
-    --output-file results/RealWorldQA_evaluation.csv \
-    --dataset RealWorldQA \
-    --eval-model gpt-3.5-turbo-0125 --api-type dash --nproc 4
-```
-
-### Example: MMMU
+Use the SFT model tester described in [SFT Model Testing (Qualitative Inference)](#sft-model-testing-qualitative-inference) above. The `--from_val` flag loads questions from `sft_val_no_objlist.json` and appends a `"gt"` turn to each output entry so predictions can be compared against ground truth.
 
 ```bash
-cd evaluation/mmmu
+# Compare predictions vs val GT for indices 0..49
+bash nuscenes_pipeline/scripts/run_sft_model_tester.sh val 0 49
 
-python run_mmmu.py infer \
-    --model-path /path/to/your/sft-checkpoint \
-    --data-dir /path/to/mmmu_data \
-    --dataset MMMU_DEV_VAL \
-    --output-file results/mmmu_dev_val_predictions.jsonl \
-    --max-new-tokens 32768 \
-    --temperature 0.7 --top-p 0.8 --top-k 20
-
-python run_mmmu.py eval \
-    --data-dir /path/to/mmmu_data \
-    --input-file results/mmmu_dev_val_predictions.jsonl \
-    --output-file results/mmmu_dev_val_eval_results.csv \
-    --dataset MMMU_DEV_VAL \
-    --eval-model gpt-3.5-turbo-0125 --api-type dash --nproc 16
+# Or directly
+python -m nuscenes_pipeline.modules.sft_model_tester \
+    --from_val --val_indices 0 1 2 3 4 5 \
+    --base_model ckpts/qwen3_vl_8b_instruct \
+    --lora_path output_nuscenes_lora_no_objlist_cleansing_qads/checkpoint-5500 \
+    --val_path sft_dataset/sft_val_no_objlist.json \
+    --output_dir sft_dataset \
+    --output_name sft_test_ckpt5500.json
 ```
 
-### Common Inference Arguments
+The output JSON matches the training schema:
+```json
+[
+  {
+    "image": ["...CAM_FRONT_LEFT.jpg", "...CAM_FRONT.jpg", ...],
+    "conversations": [
+      {"from": "system", "value": "You are an autonomous driving analysis agent..."},
+      {"from": "human",  "value": "... TASK: ..."},
+      {"from": "gpt",    "value": "<model prediction>"},
+      {"from": "gt",     "value": "<ground truth answer from val set>"}
+    ]
+  }
+]
+```
 
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `--model-path` | str | — | Path to fine-tuned model checkpoint or HuggingFace model ID |
-| `--data-dir` | str | — | Path to benchmark dataset |
-| `--output-file` | str | — | Output JSONL file for predictions |
-| `--tensor-parallel-size` | int | `1` | Number of GPUs for tensor parallelism |
-| `--gpu-memory-utilization` | float | `0.9` | GPU memory fraction for vLLM |
-| `--max-model-len` | int | `128000` | Maximum model context length |
-| `--max-new-tokens` | int | `32768` | Maximum tokens to generate |
-| `--temperature` | float | `0.7` | Sampling temperature |
-| `--top-p` | float | `0.8` | Top-p (nucleus) sampling |
-| `--top-k` | int | `20` | Top-k sampling |
+### Step 2: Qualitative Inspection via QA Visualizer
 
-### Web Demo
-
-Interactive Gradio web interface for testing the fine-tuned model with custom images and questions:
+Load the prediction JSON into the Flask web dashboard to compare predictions vs GT alongside the surround-view images and BEV overlay:
 
 ```bash
-# Using HuggingFace backend
-python web_demo_mm.py --backend hf \
-    --checkpoint-path /path/to/your/sft-checkpoint \
-    --server-port 7860
-
-# Using vLLM backend (faster)
-python web_demo_mm.py --backend vllm \
-    --checkpoint-path /path/to/your/sft-checkpoint \
-    --server-port 7860 \
-    --tensor-parallel-size 1 \
-    --gpu-memory-utilization 0.7
+python -m nuscenes_pipeline.visualization.qa_visualizer \
+    --data_dir sft_dataset \
+    --pkl_path ./data/nuscenes/nuscenes2d_ego_temporal_infos_val.pkl \
+    --port 6060
 ```
 
-| Argument | Type | Default | Description |
-|----------|------|---------|-------------|
-| `--checkpoint-path`, `-c` | str | `Qwen/Qwen3-VL-235B-A22B-Instruct` | Model checkpoint path |
-| `--backend` | str | `hf` | Backend: `hf` (HuggingFace) or `vllm` |
-| `--server-port` | int | `7860` | Web server port |
-| `--server-name` | str | `127.0.0.1` | Web server host |
-| `--flash-attn2` | flag | `False` | Enable Flash Attention 2 (HF backend) |
-| `--tensor-parallel-size` | int | `1` | GPU count for tensor parallelism (vLLM backend) |
-| `--gpu-memory-utilization` | float | `0.7` | GPU memory fraction (vLLM backend) |
+The dashboard renders the 6-view panorama with question/answer bounding boxes (green = question-referenced objects, pink = answer-referenced objects), the BEV with ground-truth velocity vectors, and both the model prediction and the GT answer side-by-side. See the [qa_visualizer](#qa_visualizerpy) section for keyboard shortcuts and arguments.
+
+### What to Look For
+
+| Signal | Where to check |
+|--------|----------------|
+| Hallucinated objects (e.g., pedestrians that aren't in any camera view) | Compare GPT answer vs green/pink bboxes in the panorama |
+| Incorrect motion-state claims | Compare "moving/stationary" language vs velocity arrows in the BEV |
+| Wrong spatial zone ("front-right" vs "rear-left") | Check which camera view the referenced object appears in |
+| MCQ option letter vs rationale mismatch | Inspect the bullet reasoning in the answer against the chosen letter |
+| Missed traffic signals | Cross-reference with the Stage 1B traffic analysis for the same sample |
 
 ---
 
