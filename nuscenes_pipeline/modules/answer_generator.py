@@ -302,35 +302,49 @@ Across all pairs generated for a single template, ensure:
     e) For ENTITY placeholders: select a different OBJ that changes the answer
     f) For no-placeholder templates: if the answer is fixed, contrastive is null.
 
-**mcq** (68 templates — multiple choice with 5 options A-E):
+**mcq** (68 templates — multiple choice with 5 options A-E, variable number correct):
   Each MCQ question MUST have exactly 5 options labeled (A) through (E).
-  The correct answer is the option letter (e.g., "B").
+  The number of CORRECT options is variable (1 to 5) and is PRE-ASSIGNED per pair
+  in the field `num_correct_positive` / `num_correct_contrastive`.
+  You MUST construct the MCQ so that exactly that many options are correct.
 
   Option construction rules:
-    1. **Correct option**: The factually correct answer grounded in the scene.
-    2. **Distractors (4 options)**: Plausible but incorrect alternatives.
+    1. **Correct options (count = `num_correct_*`)**: All factually correct answers
+       grounded in the scene. The count is predetermined — you do NOT choose it.
+       - If `num_correct` = 1: a single-answer MCQ (pick one)
+       - If `num_correct` = 2-4: a multi-select MCQ (multiple true statements)
+       - If `num_correct` = 5: all 5 options are correct (edge case — use when
+         every option is verifiably true of the scene)
+    2. **Distractors (count = 5 − `num_correct`)**: Plausible but incorrect alternatives.
        - Draw from `expected_answers` when available (these are the candidate pool).
-       - If `expected_answers` has fewer than 5 values, generate plausible
+       - If `expected_answers` has fewer than needed values, generate plausible
          distractors that are semantically consistent with the question type
          (e.g., for a color question: other colors; for a vehicle type: other types).
-       - If `expected_answers` has more than 5 values, select the 4 most
-         plausible distractors from the pool.
-    3. **Distractor quality**:
-       - At least 1 distractor should be a "close miss" (plausible for the scene).
-       - At least 1 distractor should be clearly wrong (to set a difficulty range).
        - Avoid absurd or semantically incoherent options.
-    4. **Randomize position**: The correct answer should NOT always be option (A).
-       Vary the position across pairs.
+    3. **Distractor quality** (when distractors exist):
+       - At least one distractor should be a "close miss" (plausible for the scene).
+       - At least one distractor should be clearly wrong (to set a difficulty range).
+    4. **Randomize correct-option positions**: Spread correct letters across A-E
+       positions; do NOT always place correct options at the start.
 
-  POSITIVE → correct option letter  |  CONTRASTIVE → different correct option letter
+  Answer field format:
+    - Single correct: `"answer": "B"`
+    - Multiple correct: `"answer": "A,C,D"` (comma-separated option letters, no spaces)
+    - The number of letters in `answer` must equal `num_correct_*`.
+
+  POSITIVE → correct answer set (size `num_correct_positive`)
+  CONTRASTIVE → different correct answer set (size `num_correct_contrastive`)
+  The contrastive's answer set must DIFFER from the positive's answer set
+  (different letters or different count).
+
   Strategies:
     a) For object/state templates: swap placeholder to a different object/state
-       that produces a different correct answer and different MCQ options
+       that produces a different correct answer set
     b) For comparison templates: swap object order or swap one object to shift
-       which option wins
+       which option(s) are correct
     c) For view-specific templates: change <direction>/<view> to get a different
-       set of visible objects → different correct answer
-    d) If only one valid answer exists in the scene, set contrastive to null.
+       set of visible objects → different correct answer set
+    d) If only one unique valid answer set exists in the scene, set contrastive to null.
 
 **open_ended** (21 templates):
   POSITIVE → factual descriptive answer  |  CONTRASTIVE → different factual answer
@@ -464,14 +478,19 @@ Short-answer = the minimal factual response with no extra elaboration.
 All detail and justification goes in the "reasoning" field, not in "answer".
 
 1. **y_or_n**: Strictly "yes" or "no". Nothing else.
-2. **mcq**: The correct option LETTER only (e.g., "B"). Nothing else.
-   - Construct exactly 5 options labeled (A) through (E): 1 correct + 4 plausible distractors.
-   - Draw distractors from `expected_answers` pool when available;
-     generate semantically consistent alternatives when the pool is too small.
+2. **mcq**: The correct option LETTER(S), comma-separated if multiple.
+   - Single correct: `"B"`. Multiple correct: `"A,C,D"` (no spaces).
+   - Construct exactly 5 options labeled (A) through (E).
+   - The number of CORRECT options is pre-assigned per pair in `num_correct_positive` /
+     `num_correct_contrastive` (an integer from 1 to 5 drawn randomly during
+     pre-instantiation). You MUST match that count exactly.
+   - Distractors: `5 - num_correct` plausible incorrect options.
+     Draw from `expected_answers` when available; generate semantically consistent
+     alternatives when the pool is too small.
    - Include the full options list in `mcq_options`:
      {"A": "option text", "B": "option text", "C": "option text",
       "D": "option text", "E": "option text"}
-   - Randomize the position of the correct answer across pairs.
+   - Randomize which positions (A-E) hold the correct options across pairs.
 3. **distance**: A single value with unit (e.g., "approximately 7.4m"). No sentence.
 4. **num_count**: A single integer (e.g., "3"). No sentence.
 5. **open_ended** (EXCEPTION — longer answers allowed):
@@ -500,8 +519,13 @@ Required bullet content:
 Example (y_or_n):
   "reasoning": "- OBJ 18 (car) is 7.4m directly ahead, visible in Image 2 (Front)\n- OBJ 23 (car) is 12.5m ahead in the same lane, visible in Image 2\n- Both vehicles are in the ego-vehicle's current lane, confirming presence\n- Answer: yes"
 
-Example (mcq):
+Example (mcq, single correct, num_correct=1):
   "reasoning": "- Image 2 (Front) shows a traffic light ahead of the ego-vehicle\n- The light displays a solid red circle, verified in Image 2\n- No green or yellow signal is visible for the ego-vehicle's lane\n- Correct option: (C) red"
+  "answer": "C"
+
+Example (mcq, multi-correct, num_correct=3):
+  "reasoning": "- Image 2 shows a pedestrian 22m ahead on the crosswalk\n- Image 3 shows a cyclist in the adjacent right lane\n- Image 5 shows a vehicle braking 6m behind the ego\n- These three agents all affect the ego's immediate driving situation\n- Correct options: (A), (C), (D)"
+  "answer": "A,C,D"
 
 For CONTRASTIVE reasoning, additionally include:
   - A bullet stating which placeholder(s) were changed and the value source
@@ -835,6 +859,15 @@ def pre_instantiate_pairs(
     tmpl_str = template.get('template', '')
     valid_ph = template.get('valid_placeholders', {})
     original_ph = template.get('original_placeholders', {})
+    answer_type = template.get('answer_type', '')
+    is_mcq = answer_type == 'mcq'
+
+    def _sample_mcq_correct_counts():
+        """Sample (num_correct_positive, num_correct_contrastive) each in [1, 5].
+        Ensures the two counts differ OR both are feasible to produce different answer sets."""
+        n_pos = rng.randint(1, 5)
+        n_ctr = rng.randint(1, 5)
+        return n_pos, n_ctr
 
     # Normalize tag keys
     valid_ph = {_normalize_tag(k): v for k, v in valid_ph.items()}
@@ -845,13 +878,18 @@ def pre_instantiate_pairs(
 
     if not tags_in_template:
         # No-placeholder template — single pair, no pre-instantiation needed
-        return [{
+        pair = {
             'positive_question': tmpl_str,
             'contrastive_question': None,
             'positive_mapping': {},
             'contrastive_mapping': {},
             'contrastive_strategy': 'no_placeholders',
-        }]
+        }
+        if is_mcq:
+            n_pos, n_ctr = _sample_mcq_correct_counts()
+            pair['num_correct_positive'] = n_pos
+            pair['num_correct_contrastive'] = n_ctr
+        return [pair]
 
     # Separate ENTITY vs LEXICAL tags
     entity_tags = [t for t in tags_in_template if t.lower() in ENTITY_TAGS]
@@ -932,13 +970,18 @@ def pre_instantiate_pairs(
         else:
             cont_strategy = "no_absent_values_available"
 
-        pairs.append({
+        pair = {
             'positive_question': pos_q,
             'contrastive_question': cont_q,
             'positive_mapping': mapping,
             'contrastive_mapping': cont_mapping,
             'contrastive_strategy': cont_strategy,
-        })
+        }
+        if is_mcq:
+            n_pos, n_ctr = _sample_mcq_correct_counts()
+            pair['num_correct_positive'] = n_pos
+            pair['num_correct_contrastive'] = n_ctr
+        pairs.append(pair)
 
     return pairs
 
@@ -951,10 +994,18 @@ def build_verification_prompt(
     pre_pairs: List[Dict],
     template_num: int,
     total_templates: int,
+    answer_mode: str = "a_r",
 ) -> str:
     """
     Build a prompt for the VLM to VERIFY pre-instantiated QA pairs and
     propose additional contrastive variations.
+
+    answer_mode:
+        "a_r" (default): answer first, then reasoning — VLM commits to an answer
+                         then justifies it with bullet-point reasoning.
+        "r_a":           reasoning first, then answer — VLM reasons step-by-step
+                         FIRST, then derives the final answer from that reasoning.
+                         Recommended for autolabel / GT-label generation.
 
     The VLM's job:
       1. Answer each pre-instantiated positive + contrastive question
@@ -1005,9 +1056,15 @@ def build_verification_prompt(
     for i, pair in enumerate(pre_pairs, 1):
         parts.append(f"  Pair {i}:")
         parts.append(f"    Positive Question: \"{pair['positive_question']}\"")
+        if 'num_correct_positive' in pair:
+            parts.append(f"    [MCQ] num_correct_positive: {pair['num_correct_positive']} "
+                         f"(build 5 options A-E with exactly this many correct)")
         if pair['contrastive_question']:
             parts.append(f"    Contrastive Question: \"{pair['contrastive_question']}\"")
             parts.append(f"    Contrastive Strategy: {pair['contrastive_strategy']}")
+            if 'num_correct_contrastive' in pair:
+                parts.append(f"    [MCQ] num_correct_contrastive: {pair['num_correct_contrastive']} "
+                             f"(must differ from positive's answer set)")
         else:
             parts.append(f"    Contrastive Question: (none pre-generated — you must propose one)")
         parts.append("")
@@ -1015,29 +1072,70 @@ def build_verification_prompt(
     # Task instructions
     parts.append("--- YOUR TASK ---")
     parts.append("")
-    parts.append("For EACH pre-instantiated pair above:")
-    parts.append("")
-    parts.append("1. **ANSWER** the positive question with grounded reasoning")
-    parts.append("   (reference OBJ IDs, camera Image numbers, spatial data)")
-    parts.append("")
-    parts.append("2. **ANSWER** the contrastive question (if provided) with grounded reasoning")
-    parts.append("")
-    parts.append("3. **PROPOSE ADDITIONAL CONTRASTIVE QUESTIONS** (1-2 per pair):")
-    parts.append("   For each pair, suggest creative alternative contrastive questions that:")
-    parts.append("   - Change different placeholder(s) than the pre-generated contrastive")
-    parts.append("   - Target different objects, locations, or conditions in the scene")
-    parts.append("   - Produce a different answer from the positive with high confidence")
-    parts.append("   - Are non-trivial (require actual scene analysis)")
-    parts.append("   Include the answer and reasoning for each proposed contrastive.")
-    parts.append("")
-    parts.append("4. For ENTITY-type placeholders, use four-layer grounding:")
-    parts.append("   OBJ {id} ({visual_description}, {distance_direction}, {camera_ref})")
-    parts.append("")
 
-    # Output format
+    if answer_mode == "r_a":
+        parts.append("ANSWER MODE: REASONING-FIRST (r_a)")
+        parts.append("For each question, FIRST write your step-by-step reasoning based on the")
+        parts.append("scene evidence, THEN derive the final answer from that reasoning.")
+        parts.append("Do NOT commit to an answer before reasoning. The answer must be the")
+        parts.append("natural conclusion of the bullet-point reasoning, not a pre-chosen value")
+        parts.append("you then justify.")
+        parts.append("")
+        parts.append("For EACH pre-instantiated pair above:")
+        parts.append("")
+        parts.append("1. **REASON then ANSWER** the positive question:")
+        parts.append("   a. Write bullet-point reasoning: cite OBJ IDs, camera Image numbers,")
+        parts.append("      spatial data, observed states")
+        parts.append("   b. Derive the final answer from those bullets")
+        parts.append("")
+        parts.append("2. **REASON then ANSWER** the contrastive question (if provided):")
+        parts.append("   a. Bullet-point reasoning on how the altered placeholder changes the scene grounding")
+        parts.append("   b. Derive the final (different) answer from that reasoning")
+        parts.append("")
+        parts.append("3. **PROPOSE ADDITIONAL CONTRASTIVE QUESTIONS** (1-2 per pair):")
+        parts.append("   For each proposed contrastive, follow the same reason-first process:")
+        parts.append("   reasoning bullets → derived answer.")
+        parts.append("   Proposals must:")
+        parts.append("   - Change different placeholder(s) than the pre-generated contrastive")
+        parts.append("   - Target different objects, locations, or conditions in the scene")
+        parts.append("   - Produce a different answer from the positive with high confidence")
+        parts.append("   - Be non-trivial (require actual scene analysis)")
+        parts.append("")
+        parts.append("4. For ENTITY-type placeholders, use four-layer grounding:")
+        parts.append("   OBJ {id} ({visual_description}, {distance_direction}, {camera_ref})")
+        parts.append("")
+    else:
+        parts.append("ANSWER MODE: ANSWER-FIRST (a_r)")
+        parts.append("")
+        parts.append("For EACH pre-instantiated pair above:")
+        parts.append("")
+        parts.append("1. **ANSWER** the positive question with grounded reasoning")
+        parts.append("   (reference OBJ IDs, camera Image numbers, spatial data)")
+        parts.append("")
+        parts.append("2. **ANSWER** the contrastive question (if provided) with grounded reasoning")
+        parts.append("")
+        parts.append("3. **PROPOSE ADDITIONAL CONTRASTIVE QUESTIONS** (1-2 per pair):")
+        parts.append("   For each pair, suggest creative alternative contrastive questions that:")
+        parts.append("   - Change different placeholder(s) than the pre-generated contrastive")
+        parts.append("   - Target different objects, locations, or conditions in the scene")
+        parts.append("   - Produce a different answer from the positive with high confidence")
+        parts.append("   - Are non-trivial (require actual scene analysis)")
+        parts.append("   Include the answer and reasoning for each proposed contrastive.")
+        parts.append("")
+        parts.append("4. For ENTITY-type placeholders, use four-layer grounding:")
+        parts.append("   OBJ {id} ({visual_description}, {distance_direction}, {camera_ref})")
+        parts.append("")
+
+    # Output format — field order depends on answer_mode
     parts.append("--- OUTPUT FORMAT ---")
     parts.append("")
-    parts.append("""Respond with a JSON object:
+
+    if answer_mode == "r_a":
+        # reasoning before answer
+        order_note = ("IMPORTANT: Put 'reasoning' BEFORE 'answer' in every pair. "
+                      "The answer field must be filled in AFTER the reasoning bullets are written, "
+                      "so the VLM derives the answer from the reasoning (not the other way around).")
+        schema = """Respond with a JSON object:
 {
     "template_idx": <int>,
     "category": "<string>",
@@ -1061,7 +1159,75 @@ def build_verification_prompt(
                 },
                 "instantiated_question": "<the pre-instantiated positive question>",
                 "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
-                "answer": "<answer (option letter for mcq, e.g. 'B')>",
+                "reasoning": "- <bullet 1: OBJ ID + spatial data>\n- <bullet 2: camera ref>\n- <bullet 3: conclusion toward the answer>",
+                "answer": "<final answer DERIVED from the reasoning above (for mcq: letter(s), e.g. 'B' or 'A,C,D' — count must match num_correct_positive)>",
+                "confidence": "<high|medium|low>",
+                "relevant_cameras": [<int>]
+            },
+            "contrastive": {
+                "altered_placeholders": ["<tags changed>"],
+                "contrastive_strategy": "<what was changed and why>",
+                "tag_mappings": { ... },
+                "instantiated_question": "<the pre-instantiated contrastive question>",
+                "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
+                "reasoning": "- <bullet 1>\n- <bullet 2: why this altered placeholder changes the grounding>\n- <bullet 3: conclusion>",
+                "answer": "<final answer DERIVED from reasoning, different from positive (for mcq: count = num_correct_contrastive)>",
+                "confidence": "<high|medium|low>",
+                "relevant_cameras": [<int>]
+            },
+            "vlm_proposed_contrastives": [
+                {
+                    "altered_placeholders": ["<tags changed>"],
+                    "contrastive_strategy": "<what was changed and why>",
+                    "instantiated_question": "<your proposed contrastive question>",
+                    "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
+                    "reasoning": "- <bullet 1>\n- <bullet 2>\n- <bullet 3>",
+                    "answer": "<final answer DERIVED from reasoning>",
+                    "confidence": "<high|medium|low>",
+                    "relevant_cameras": [<int>]
+                }
+            ]
+        },
+        ...
+    ]
+}
+
+NOTES:
+- """ + order_note + """
+- "mcq_options" is REQUIRED for mcq answer_type; omit for other types.
+- For mcq, "answer" is the correct option LETTER(S): single letter ("B") or comma-separated letters ("A,C,D").
+- The number of correct options is pre-assigned per pair in `num_correct_positive` / `num_correct_contrastive` (1-5, sampled randomly). The `answer` string must contain exactly that many letters.
+- Construct exactly 5 options (A-E): `num_correct` correct + `(5 - num_correct)` plausible distractors.
+- Randomize which positions (A-E) hold the correct options across pairs.
+If contrastive is impossible: "contrastive": null, "contrastive_skip_reason": "<explanation>"
+"""
+    else:
+        # answer before reasoning (original)
+        schema = """Respond with a JSON object:
+{
+    "template_idx": <int>,
+    "category": "<string>",
+    "answer_type": "<y_or_n|mcq|distance|open_ended|num_count>",
+    "placeholder_classification": {
+        "<tag>": "<entity|lexical>"
+    },
+    "total_pairs": <int>,
+    "max_pairs_note": <null or "explanation if fewer pairs">,
+    "pairs": [
+        {
+            "pair_id": 1,
+            "positive": {
+                "tag_mappings": {
+                    "<tag>": {
+                        "type": "<entity|lexical>",
+                        "selected_obj_id": <int_or_null>,
+                        "grounded_description": "<four-layer for entity | value for lexical>",
+                        "selection_rationale": "<why chosen>"
+                    }
+                },
+                "instantiated_question": "<the pre-instantiated positive question>",
+                "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
+                "answer": "<answer (for mcq: option letter(s), e.g. 'B' or 'A,C,D' — count must match num_correct_positive)>",
                 "reasoning": "- <bullet 1: OBJ ID + spatial data>\n- <bullet 2: camera ref>\n- <bullet 3: conclusion>",
                 "confidence": "<high|medium|low>",
                 "relevant_cameras": [<int>]
@@ -1072,7 +1238,7 @@ def build_verification_prompt(
                 "tag_mappings": { ... },
                 "instantiated_question": "<the pre-instantiated contrastive question>",
                 "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
-                "answer": "<different answer (different option letter for mcq)>",
+                "answer": "<different answer (for mcq: different letter set than positive, count = num_correct_contrastive)>",
                 "reasoning": "- <bullet 1>\n- <bullet 2>\n- <bullet 3>",
                 "confidence": "<high|medium|low>",
                 "relevant_cameras": [<int>]
@@ -1096,11 +1262,14 @@ def build_verification_prompt(
 
 NOTES:
 - "mcq_options" is REQUIRED for mcq answer_type; omit for other types.
-- For mcq, "answer" must be the correct option LETTER (A/B/C/D/E).
-- Construct exactly 5 options: 1 correct + 4 plausible distractors.
-- Randomize the correct answer position across pairs.
+- For mcq, "answer" is the correct option LETTER(S): single letter ("B") or comma-separated letters ("A,C,D").
+- The number of correct options is pre-assigned per pair in `num_correct_positive` / `num_correct_contrastive` (1-5, sampled randomly). The `answer` string must contain exactly that many letters.
+- Construct exactly 5 options (A-E): `num_correct` correct + `(5 - num_correct)` plausible distractors.
+- Randomize which positions (A-E) hold the correct options across pairs.
 If contrastive is impossible: "contrastive": null, "contrastive_skip_reason": "<explanation>"
-""")
+"""
+
+    parts.append(schema)
     parts.append("Output ONLY the JSON object, no additional text.")
 
     return "\n".join(parts)
@@ -1153,9 +1322,14 @@ def build_qa_generation_prompt(
     template: Dict,
     template_num: int,
     total_templates: int,
+    answer_mode: str = "a_r",
 ) -> str:
     """
     Build user prompt for a SINGLE template: tag refinement + contrastive QA pair generation.
+
+    answer_mode:
+        "a_r" (default): answer first, then reasoning.
+        "r_a":           reasoning first, then answer (autolabel-style).
     """
     parts = []
 
@@ -1204,6 +1378,13 @@ def build_qa_generation_prompt(
     # Task instructions
     parts.append("--- YOUR TASK ---")
     parts.append("")
+
+    if answer_mode == "r_a":
+        parts.append("ANSWER MODE: REASONING-FIRST (r_a)")
+        parts.append("For every instance below, write your reasoning BEFORE the answer.")
+        parts.append("The answer must be derived from the reasoning, not pre-chosen.")
+        parts.append("")
+
     parts.append("Generate MULTIPLE CONTRASTIVE QA PAIRS for this template (minimum 2 pairs")
     parts.append("where the scene supports it):")
     parts.append("")
@@ -1211,21 +1392,40 @@ def build_qa_generation_prompt(
     parts.append("")
     parts.append("2. **FOR EACH PAIR, generate**:")
     parts.append("")
-    parts.append("   a. **POSITIVE INSTANCE**:")
-    parts.append("      - ENTITY tags → ground to a specific OBJ with four-layer description")
-    parts.append("      - LEXICAL tags → select from available candidates")
-    parts.append("      - Write the instantiated question")
-    parts.append("      - Provide answer + reasoning")
-    parts.append("")
-    parts.append("   b. **CONTRASTIVE INSTANCE**:")
-    parts.append("      - Alter placeholder(s) with minimal perturbation to change the answer")
-    parts.append("      - LEXICAL changes: prefer `original_placeholders` \\ `valid_placeholders`;")
-    parts.append("        fallback to plausible absent values")
-    parts.append("      - ENTITY changes: select different object, swap order, or use absent category")
-    parts.append("      - Write the altered question")
-    parts.append("      - Provide the different answer + reasoning")
-    parts.append("      - If impossible for this combination, set contrastive to null")
-    parts.append("")
+
+    if answer_mode == "r_a":
+        parts.append("   a. **POSITIVE INSTANCE**:")
+        parts.append("      - ENTITY tags → ground to a specific OBJ with four-layer description")
+        parts.append("      - LEXICAL tags → select from available candidates")
+        parts.append("      - Write the instantiated question")
+        parts.append("      - Write bullet-point reasoning FIRST, then derive the final answer")
+        parts.append("")
+        parts.append("   b. **CONTRASTIVE INSTANCE**:")
+        parts.append("      - Alter placeholder(s) with minimal perturbation to change the answer")
+        parts.append("      - LEXICAL changes: prefer `original_placeholders` \\ `valid_placeholders`;")
+        parts.append("        fallback to plausible absent values")
+        parts.append("      - ENTITY changes: select different object, swap order, or use absent category")
+        parts.append("      - Write the altered question")
+        parts.append("      - Write bullet-point reasoning FIRST, then derive the different answer")
+        parts.append("      - If impossible for this combination, set contrastive to null")
+        parts.append("")
+    else:
+        parts.append("   a. **POSITIVE INSTANCE**:")
+        parts.append("      - ENTITY tags → ground to a specific OBJ with four-layer description")
+        parts.append("      - LEXICAL tags → select from available candidates")
+        parts.append("      - Write the instantiated question")
+        parts.append("      - Provide answer + reasoning")
+        parts.append("")
+        parts.append("   b. **CONTRASTIVE INSTANCE**:")
+        parts.append("      - Alter placeholder(s) with minimal perturbation to change the answer")
+        parts.append("      - LEXICAL changes: prefer `original_placeholders` \\ `valid_placeholders`;")
+        parts.append("        fallback to plausible absent values")
+        parts.append("      - ENTITY changes: select different object, swap order, or use absent category")
+        parts.append("      - Write the altered question")
+        parts.append("      - Provide the different answer + reasoning")
+        parts.append("      - If impossible for this combination, set contrastive to null")
+        parts.append("")
+
     parts.append("3. **DIVERSITY REQUIREMENTS**:")
     parts.append("   - Each pair MUST use a DIFFERENT combination of placeholder values")
     parts.append("   - Vary objects (different OBJ IDs), locations, directions, difficulty levels")
@@ -1239,7 +1439,9 @@ def build_qa_generation_prompt(
     # Output format — single template, direct structure
     parts.append("--- OUTPUT FORMAT ---")
     parts.append("")
-    parts.append("""Respond with a JSON object:
+
+    if answer_mode == "r_a":
+        schema = """Respond with a JSON object:
 {
     "template_idx": <int>,
     "category": "<string>",
@@ -1263,7 +1465,77 @@ def build_qa_generation_prompt(
                 },
                 "instantiated_question": "<final question>",
                 "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
-                "answer": "<answer (option letter for mcq, e.g. 'B')>",
+                "reasoning": "- <bullet 1: OBJ ID + spatial data>\n- <bullet 2: camera ref>\n- <bullet 3: conclusion toward the answer>",
+                "answer": "<final answer DERIVED from the reasoning above (for mcq: letter(s), e.g. 'B' or 'A,C,D' — count must match num_correct_positive)>",
+                "confidence": "<high|medium|low>",
+                "relevant_cameras": [<int>]
+            },
+            "contrastive": {
+                "altered_placeholders": ["<tags changed>"],
+                "contrastive_strategy": "<what was changed and why>",
+                "tag_mappings": {
+                    "<tag>": {
+                        "type": "<entity|lexical>",
+                        "selected_obj_id": <int_or_null>,
+                        "grounded_description": "<value used>",
+                        "selection_rationale": "<why chosen>",
+                        "value_source": "<valid_placeholders|original_placeholders|fallback>"
+                    }
+                },
+                "instantiated_question": "<altered question>",
+                "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
+                "reasoning": "- <bullet 1>\n- <bullet 2: why this altered placeholder changes the grounding>\n- <bullet 3>",
+                "answer": "<final answer DERIVED from reasoning, different from positive (for mcq: count = num_correct_contrastive)>",
+                "confidence": "<high|medium|low>",
+                "relevant_cameras": [<int>]
+            }
+        },
+        {
+            "pair_id": 2,
+            "positive": { ... },
+            "contrastive": { ... }
+        },
+        ...
+    ]
+}
+
+NOTES:
+- IMPORTANT: Put 'reasoning' BEFORE 'answer' in every instance. Fill in the answer AFTER writing the reasoning bullets, so the answer is derived from the reasoning (not justified after-the-fact).
+- "mcq_options" is REQUIRED for mcq answer_type; omit for other types.
+- For mcq, "answer" is the correct option LETTER(S): single letter ("B") or comma-separated letters ("A,C,D").
+- The number of correct options is pre-assigned per pair in `num_correct_positive` / `num_correct_contrastive` (1-5, sampled randomly). The `answer` string must contain exactly that many letters.
+- Construct exactly 5 options (A-E): `num_correct` correct + `(5 - num_correct)` plausible distractors.
+- Randomize which positions (A-E) hold the correct options across pairs.
+If contrastive is impossible for a specific pair:
+    "contrastive": null,
+    "contrastive_skip_reason": "<explanation>"
+"""
+    else:
+        schema = """Respond with a JSON object:
+{
+    "template_idx": <int>,
+    "category": "<string>",
+    "answer_type": "<y_or_n|mcq|distance|open_ended|num_count>",
+    "placeholder_classification": {
+        "<tag>": "<entity|lexical>"
+    },
+    "total_pairs": <int>,
+    "max_pairs_note": <null or "explanation if fewer than 3 pairs">,
+    "pairs": [
+        {
+            "pair_id": 1,
+            "positive": {
+                "tag_mappings": {
+                    "<tag>": {
+                        "type": "<entity|lexical>",
+                        "selected_obj_id": <int_or_null>,
+                        "grounded_description": "<four-layer for entity | value for lexical>",
+                        "selection_rationale": "<why chosen>"
+                    }
+                },
+                "instantiated_question": "<final question>",
+                "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
+                "answer": "<answer (for mcq: option letter(s), e.g. 'B' or 'A,C,D' — count must match num_correct_positive)>",
                 "reasoning": "- <bullet 1: OBJ ID + spatial data>\n- <bullet 2: camera ref>\n- <bullet 3: conclusion>",
                 "confidence": "<high|medium|low>",
                 "relevant_cameras": [<int>]
@@ -1282,7 +1554,7 @@ def build_qa_generation_prompt(
                 },
                 "instantiated_question": "<altered question>",
                 "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
-                "answer": "<different answer (different option letter for mcq)>",
+                "answer": "<different answer (for mcq: different letter set than positive, count = num_correct_contrastive)>",
                 "reasoning": "- <bullet 1>\n- <bullet 2: why answer differs>\n- <bullet 3>",
                 "confidence": "<high|medium|low>",
                 "relevant_cameras": [<int>]
@@ -1299,13 +1571,16 @@ def build_qa_generation_prompt(
 
 NOTES:
 - "mcq_options" is REQUIRED for mcq answer_type; omit for other types.
-- For mcq, "answer" must be the correct option LETTER (A/B/C/D/E).
-- Construct exactly 5 options: 1 correct + 4 plausible distractors.
-- Randomize the correct answer position across pairs.
+- For mcq, "answer" is the correct option LETTER(S): single letter ("B") or comma-separated letters ("A,C,D").
+- The number of correct options is pre-assigned per pair in `num_correct_positive` / `num_correct_contrastive` (1-5, sampled randomly). The `answer` string must contain exactly that many letters.
+- Construct exactly 5 options (A-E): `num_correct` correct + `(5 - num_correct)` plausible distractors.
+- Randomize which positions (A-E) hold the correct options across pairs.
 If contrastive is impossible for a specific pair:
     "contrastive": null,
     "contrastive_skip_reason": "<explanation>"
-""")
+"""
+
+    parts.append(schema)
     parts.append("Output ONLY the JSON object, no additional text.")
 
     return "\n".join(parts)
@@ -1366,6 +1641,7 @@ def _worker_process_sample(
     categories: Optional[List[str]] = None,
     max_pairs_per_template: int = 3,
     temperature: float = 0.6,
+    answer_mode: str = "a_r",
 ) -> Dict:
     """
     Worker function: load Stage 1 results, enrich with question bank data,
@@ -1470,6 +1746,7 @@ def _worker_process_sample(
                 pre_pairs=pre_pairs,
                 template_num=tmpl_idx + 1,
                 total_templates=total_templates,
+                answer_mode=answer_mode,
             )
 
             # Prepend prior analysis for risk/traffic categories
@@ -1705,6 +1982,12 @@ def main():
                         help="Sampling temperature for generation (default: 0.6)")
     parser.add_argument("--max_pairs", type=int, default=3,
                         help="Maximum pre-instantiated pairs per template (default: 3)")
+    parser.add_argument("--answer_mode", type=str, default="a_r",
+                        choices=["a_r", "r_a"],
+                        help="Output order in VLM response: "
+                             "'a_r' (default) = answer first, then reasoning (chain-of-thought style); "
+                             "'r_a' = reasoning first, then answer (autolabel style — the VLM derives the "
+                             "answer from its reasoning rather than justifying a pre-chosen answer)")
 
     # Multiprocessing
     parser.add_argument("--num_workers", type=int, default=8,
@@ -1758,6 +2041,7 @@ def main():
     log_and_print(f"  Max new tokens: {args.max_new_tokens}")
     log_and_print(f"  Temperature: {args.temperature}")
     log_and_print(f"  Max pairs per template: {args.max_pairs}")
+    log_and_print(f"  Answer mode: {args.answer_mode} ({'reasoning first, then answer' if args.answer_mode == 'r_a' else 'answer first, then reasoning'})")
     log_and_print(f"  Output dir: {args.output_dir}")
     log_and_print(f"  Log file: {log_file}")
     log_and_print(f"  Camera order: FL, F, FR, RL, R, RR (egocentric)")
@@ -1793,6 +2077,7 @@ def main():
             categories,
             args.max_pairs,
             args.temperature,
+            args.answer_mode,
         )
         for idx in sample_indices
     ]

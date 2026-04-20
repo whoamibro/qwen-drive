@@ -25,7 +25,8 @@ START_IDX=${1:-0}
 END_IDX=${2:-6018}
 CATEGORY=${3:-"all"}
 NUM_WORKERS=${4:-8}
-MODE=${5:-"range"}   # "range" (default) or "from_stage1"
+MODE=${5:-"range"}         # "range" (default) or "from_stage1"
+ANSWER_MODE=${6:-"a_r"}    # "a_r" (default, answer-first) or "r_a" (reasoning-first)
 
 # Output directories
 STAGE1_DIR="qa_outputs"
@@ -40,6 +41,7 @@ echo "==========================================================================
 echo "Category: $CATEGORY"
 echo "Num Workers: $NUM_WORKERS"
 echo "Mode: $MODE"
+echo "Answer Mode: $ANSWER_MODE"
 if [ "$MODE" = "from_stage1" ]; then
     echo "  -> Auto-discovering samples from Stage 1 outputs in $STAGE1_DIR"
 else
@@ -75,7 +77,8 @@ python3 -m nuscenes_pipeline.modules.answer_generator \
     --output_dir "$OUTPUT_DIR" \
     --log_dir "$LOG_DIR" \
     --risk_results_dir "$RISK_RESULTS_DIR" \
-    --traffic_results_dir "$TRAFFIC_RESULTS_DIR"
+    --traffic_results_dir "$TRAFFIC_RESULTS_DIR" \
+    --answer_mode "$ANSWER_MODE"
 
 echo ""
 echo "================================================================================"
