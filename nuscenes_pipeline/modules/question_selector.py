@@ -89,6 +89,11 @@ def load_traffic_analysis_response(traffic_results_dir: str, sample_idx: int) ->
     return _load_prior_analysis_response(traffic_results_dir, sample_idx, "traffic_signal")
 
 
+def load_traffic_sign_response(sign_results_dir: str, sample_idx: int) -> Optional[str]:
+    """Load traffic sign extraction response. Files: {idx:04d}_*_sign.json"""
+    return _load_prior_analysis_response(sign_results_dir, sample_idx, "sign")
+
+
 def image_to_base64_data_uri(img_pil: Image.Image, format: str = "JPEG") -> str:
     """Convert a PIL Image to a base64 data URI string."""
     buffer = io.BytesIO()

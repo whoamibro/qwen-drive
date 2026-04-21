@@ -48,6 +48,7 @@ from nuscenes_pipeline.core.qa_utils import (
 from nuscenes_pipeline.modules.question_selector import (
     load_risk_assessment_response,
     load_traffic_analysis_response,
+    load_traffic_sign_response,
 )
 
 
@@ -1596,6 +1597,7 @@ _worker_analyzer = None
 _worker_question_bank = None
 _worker_risk_results_dir = None
 _worker_traffic_results_dir = None
+_worker_sign_results_dir = None
 
 
 def _worker_init(
@@ -1603,13 +1605,14 @@ def _worker_init(
     pkl_path: str, question_bank_path: str,
     risk_results_dir: str = "",
     traffic_results_dir: str = "",
+    sign_results_dir: str = "",
 ):
     """
     Initializer for each worker process.
     Creates the OpenAI client, NuScenesDataLoader, SceneAnalyzer, and loads question bank.
     """
     global _worker_client, _worker_loader, _worker_analyzer, _worker_question_bank
-    global _worker_risk_results_dir, _worker_traffic_results_dir
+    global _worker_risk_results_dir, _worker_traffic_results_dir, _worker_sign_results_dir
 
     from openai import OpenAI as _OpenAI
     _worker_client = _OpenAI(
@@ -1623,6 +1626,7 @@ def _worker_init(
     _worker_question_bank = load_question_bank(question_bank_path)
     _worker_risk_results_dir = risk_results_dir
     _worker_traffic_results_dir = traffic_results_dir
+    _worker_sign_results_dir = sign_results_dir
 
 
 # =============================================================================
@@ -1648,7 +1652,7 @@ def _worker_process_sample(
     pre-instantiate QA pairs, call VLM for verification + additional contrasts.
     """
     global _worker_client, _worker_loader, _worker_analyzer, _worker_question_bank
-    global _worker_risk_results_dir, _worker_traffic_results_dir
+    global _worker_risk_results_dir, _worker_traffic_results_dir, _worker_sign_results_dir
 
     try:
         client = _worker_client
@@ -1657,6 +1661,7 @@ def _worker_process_sample(
         question_bank = _worker_question_bank
         risk_results_dir = _worker_risk_results_dir
         traffic_results_dir = _worker_traffic_results_dir
+        sign_results_dir = _worker_sign_results_dir
 
         # 1. Load Stage 1 results for this sample
         stage1_results = load_stage1_results(stage1_dir, sample_idx, categories)
@@ -1705,6 +1710,7 @@ def _worker_process_sample(
         # 6b. Load prior analysis responses (shared across templates)
         risk_response = load_risk_assessment_response(risk_results_dir, sample_idx)
         traffic_response = load_traffic_analysis_response(traffic_results_dir, sample_idx)
+        sign_response = load_traffic_sign_response(sign_results_dir, sample_idx)
 
         # 7. Flatten all templates across categories, enrich with question bank
         all_templates = []
@@ -1749,8 +1755,15 @@ def _worker_process_sample(
                 answer_mode=answer_mode,
             )
 
-            # Prepend prior analysis for risk/traffic categories
+            # Prepend prior analyses.
+            # Order of prepends determines distance from question body:
+            #   the LAST-prepended section sits FURTHEST from the body.
+            # We prepend category-specific priors (risk/signal) FIRST so they stay
+            # closer to the question, then sign extraction LAST so it sits further
+            # away but still informs the model.
             tmpl_category = tmpl.get('category', '')
+
+            # Risk assessment — only for Dynamic_Agents_and_Risk_Assessment
             if tmpl_category == "Dynamic_Agents_and_Risk_Assessment" and risk_response:
                 prompt = (
                     "\n\n=== RISK ASSESSMENT ANALYSIS (from prior analysis) ===\n"
@@ -1758,11 +1771,20 @@ def _worker_process_sample(
                     "=== END OF RISK ASSESSMENT ANALYSIS ===\n\n"
                 ) + prompt
 
+            # Traffic signal — only for Traffic_Signs_and_Signals
             if tmpl_category == "Traffic_Signs_and_Signals" and traffic_response:
                 prompt = (
                     "\n\n=== TRAFFIC SIGNAL ANALYSIS (from prior analysis) ===\n"
                     f"{traffic_response}\n"
                     "=== END OF TRAFFIC SIGNAL ANALYSIS ===\n\n"
+                ) + prompt
+
+            # Traffic sign extraction — applied universally across all 10 categories
+            if sign_response:
+                prompt = (
+                    "\n\n=== TRAFFIC SIGN EXTRACTION (from prior analysis) ===\n"
+                    f"{sign_response}\n"
+                    "=== END OF TRAFFIC SIGN EXTRACTION ===\n\n"
                 ) + prompt
 
             # Build user content: images + prompt
@@ -1951,6 +1973,12 @@ def main():
         help="Directory containing traffic analysis result JSONs "
              "(prepended to prompt for Traffic_Signs_and_Signals templates)",
     )
+    parser.add_argument(
+        "--sign_results_dir", type=str,
+        default="traffic_sign_results",
+        help="Directory containing traffic sign extraction result JSONs "
+             "(prepended to prompt for ALL 10 categories)",
+    )
 
     # Sample range
     parser.add_argument("--start_idx", type=int, default=0, help="Starting sample index")
@@ -2048,6 +2076,7 @@ def main():
     log_and_print(f"  Rear cameras: horizontally flipped")
     log_and_print(f"  Risk results dir: {args.risk_results_dir}")
     log_and_print(f"  Traffic results dir: {args.traffic_results_dir}")
+    log_and_print(f"  Sign results dir:    {args.sign_results_dir}")
     log_and_print("=" * 80)
 
     # Verify vLLM server
@@ -2101,6 +2130,7 @@ def main():
             args.model_name, args.api_base, args.api_key,
             args.pkl_path, args.question_bank,
             args.risk_results_dir, args.traffic_results_dir,
+            args.sign_results_dir,
         ),
     ) as pool:
         results_iter = pool.imap_unordered(_worker_wrapper, worker_args)
