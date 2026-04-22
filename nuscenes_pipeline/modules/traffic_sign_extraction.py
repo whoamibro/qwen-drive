@@ -283,12 +283,15 @@ A sign applies to the ego-vehicle only if:
 
 ### C2. ORIENTATION CHECK
 
-| Observation                                       | Ego-Relevance           |
-|---------------------------------------------------|-------------------------|
-| Sign text/symbol fully readable (front face)      | Passes orientation check|
-| Sign seen edge-on (side-profile, thin slit)       | Faces cross-traffic; FAIL |
-| Sign seen from back (blank metal panel)           | Faces opposite traffic; FAIL |
-| Sign partially angled (partly readable)           | Depends — use road alignment to decide |
+Signboard geometry (not vehicle proximity) is the primary cue for which approach
+a sign governs. Use the projected shape of the signboard as follows:
+
+| Observation                                                   | Ego-Relevance                         |
+|---------------------------------------------------------------|---------------------------------------|
+| Sign in correct proportions (octagon/rectangle/diamond face-on), text fully readable | Faces ego; passes orientation check |
+| Sign appears as a skewed/stretched trapezoid (partially facing ego) | Partially facing ego; defer to C5 (signpost direction) + C3 (road alignment) |
+| Sign edge-on (thin slit, tall narrow profile)                 | Signboard perpendicular to camera; faces a different stream; FAIL |
+| Rear visible (blank metal panel, no text/symbol)              | Faces opposite direction; FAIL         |
 
 ### C3. ROAD ALIGNMENT CHECK
 
@@ -305,6 +308,86 @@ A sign applies to the ego-vehicle only if:
 Signs in Images 4-6 (rear cameras) ego has ALREADY passed:
 - Readable from rear-view = sign faced ego when passed = still applies (continuing speed limits, one-way confirmation) unless superseded by a front-view sign.
 - Back of sign visible from rear = sign faces oncoming/cross traffic, NOT ego.
+
+### C5. SIGNPOST DIRECTIONAL INFERENCE
+
+A sign is a directional device: the signboard physically faces ONE specific
+approach. Vehicle proximity to the sign is NOT a reliable indicator (a cross-traffic
+vehicle driving past a sign that faces ego does not make the sign belong to
+cross-traffic). Instead, use these cues:
+
+1. **Signboard angle (most reliable — also covered in C2)**:
+   - Face-on proportions (octagon looks like an octagon, rectangle looks rectangular) → faces the camera / ego
+   - Foreshortened / skewed trapezoid → angled — combine with post position below
+   - Edge-on slit → faces perpendicular stream, NOT ego
+   - Blank rear → faces opposite direction, NOT ego
+
+2. **Post position relative to road geometry**:
+   - Post on the shoulder of ego's road, near an intersection, signboard facing ego's approach → **for ego**
+   - Post at the far corner of an intersection, signboard extending toward a cross-street → **for cross-traffic on that street**
+   - Post on a median between ego and oncoming lanes, signboard facing ego → **for ego**
+   - Post on the opposite side of a divided road, signboard facing away from ego → **for oncoming traffic**
+
+3. **Related road markings (strong corroborating evidence)**:
+   - STOP sign + stop line painted on ego's lane/approach → sign is **for ego**
+   - STOP sign + stop line painted on the cross-street → sign is **for cross-traffic**
+   - Crosswalk painted in front of a sign → sign pertains to that crosswalk
+   - Lane arrows painted directly below an arrow sign → sign is lane-specific
+   - No visible road markings → defer to signboard angle + post position
+
+**Key reminder**: physical proximity of vehicles to a sign does NOT indicate
+which stream the sign governs. A stop sign on the NE corner facing ego may have
+cross-traffic vehicles driving past it closer to the sign than ego's approach
+vehicles — the sign still belongs to ego if the signboard faces ego's approach.
+
+### C6. LANE-SPECIFIC APPLICABILITY
+
+A sign mounted on ego's road may still not apply to ego if it targets a
+specific lane that ego is not in. Lane scope:
+
+| Sign type                                                | Lane scope                           | Applies to ego?                                    |
+|----------------------------------------------------------|--------------------------------------|----------------------------------------------------|
+| Speed Limit (shoulder-mounted)                           | All lanes of ego's road              | Yes                                                |
+| Speed Limit (lane-specific overhead gantry)              | Only the lane directly under it      | Only if ego is in that lane                        |
+| "Straight Only" arrow (painted on lane or overhead)      | The specific lane it governs         | Only if ego is in that lane                        |
+| "Right Turn Only" arrow                                  | The right-turn lane                  | Only if ego is in the right-turn lane              |
+| "Left Turn Only" arrow                                   | The left-turn lane                   | Only if ego is in the left-turn lane               |
+| "No Right Turn" (intersection approach)                  | All lanes on ego's approach          | Yes if ego intends to turn right; otherwise N/A    |
+| "No Left Turn"                                           | All lanes on ego's approach          | Yes if ego intends to turn left; otherwise N/A     |
+| STOP / YIELD (intersection approach)                     | All lanes of ego's approach          | Yes                                                |
+| "Keep Right / Keep Left"                                 | All lanes (directional rule)         | Yes                                                |
+| "Do Not Enter" / "No Entry"                              | The entry it blocks                  | Yes if ego's intended route enters that segment    |
+
+### C7. DRIVING-COMMAND CROSS-CHECK
+
+After passing C1-C6, cross-check the sign against ego's current driving command
+(provided in the INPUT block of this prompt). A sign should only be marked
+"Applies to ego: y" if it affects ego's intended action.
+
+| Ego Driving Command | Sign                               | Applies to ego? |
+|---------------------|------------------------------------|-----------------|
+| Go straight         | STOP / YIELD                       | Yes             |
+| Go straight         | Speed Limit                        | Yes (universal) |
+| Go straight         | "No Right Turn"                    | No (ego isn't turning right) |
+| Go straight         | "No Left Turn"                     | No              |
+| Go straight         | "Right Turn Only" arrow above ego's lane | No (ego wouldn't be in that lane if going straight) |
+| Turn Left           | "No Left Turn"                     | **Yes — CRITICAL** (prohibits ego's action) |
+| Turn Left           | "Left Turn Only" arrow in ego's lane | Yes (confirms lane) |
+| Turn Left           | "Straight Only" arrow in ego's lane | Flag as WARNING (ego is in wrong lane for the intended turn) |
+| Turn Left           | "No Right Turn"                    | No              |
+| Turn Right          | "No Right Turn"                    | **Yes — CRITICAL** |
+| Turn Right          | "Right Turn Only" arrow in ego's lane | Yes (confirms lane) |
+| Turn Right          | "No Left Turn"                     | No              |
+| U-Turn              | "No U-Turn"                        | **Yes — CRITICAL** |
+| Any                 | Speed Limit                        | Yes             |
+| Any                 | Pedestrian Crossing (warning)      | Yes (applies to any maneuver) |
+| Any                 | Curve Ahead / School Zone / Construction | Yes (applies along the path) |
+| Any                 | Do Not Enter                       | Yes if ego's route enters that segment |
+
+**Rule summary**:
+- A sign that prohibits or restricts ego's intended action is HIGHLY relevant (CRITICAL).
+- A sign that describes a maneuver ego is NOT making (e.g., "No Right Turn" when ego is going straight) is NOT applicable to ego.
+- Universal signs (speed limit, pedestrian crossing, curve ahead) apply regardless of maneuver.
 
 ---
 ## PART D: COMMON SIGNS AND EGO ACTIONS
@@ -383,8 +466,13 @@ Response in English."""
 - **Scan ALL 6 views** — signs can appear in Images 1-6, not just front cameras
 - **Back-of-sign (blank metal panel) ≠ a sign for ego** — it faces the other direction
 - **Cross-street signs do NOT apply to ego** — a "No Right Turn" sign on a perpendicular street is for that street, not ego
-- **Apply the three-condition Ego-Relevance Test** (faces ego + on ego's road + not for cross-traffic/different lane)
-- **Priority: Regulatory > Warning > Guide** when multiple signs apply
+- **Signboard orientation is the primary cue** — face-on proportions = faces ego; skewed/edge-on/rear = faces a different stream (C2 + C5)
+- **Vehicle proximity to a sign is NOT reliable** — a cross-traffic vehicle driving past a sign that faces ego does not make the sign belong to cross-traffic
+- **Road markings corroborate** — stop lines, crosswalks, lane arrows tell you which approach the sign pertains to (C5)
+- **Lane-specific signs apply only to targeted lanes** — arrow signs, lane-specific speed limits, turn-only lanes (C6)
+- **Cross-check against driving command** — a "No Left Turn" sign is CRITICAL when ego is turning left, N/A when ego is going straight (C7)
+- **Apply ALL tests in order**: C1 → C2 → C3 → C4 → C5 → C6 → C7 before declaring Applies to ego: y
+- **Priority: Regulatory > Warning > Guide** when multiple applicable signs exist
 
 ---"""
 
@@ -424,12 +512,16 @@ Scan EVERY camera view. For each sign found, record:
 
 **Step 3: EGO-RELEVANCE TEST (PER SIGN)**
 
-For EACH sign recorded in Step 2, apply the three-condition test:
-1. Does it face ego's approach direction? (front face readable)
-2. Is it on ego's road? (ego's shoulder/median/gantry — not cross street)
-3. Is it NOT targeting a different lane or opposite traffic?
+For EACH sign recorded in Step 2, run the full C1-C7 pipeline:
+1. **C1+C2 Orientation**: signboard face-on proportions (not edge-on / rear / skewed beyond recognition)?
+2. **C3 Road Alignment**: mounted on ego's road (shoulder/median/gantry/overpass — not cross-street / opposite divided road)?
+3. **C4 Rear-view special case**: if in Images 4-6, is the front face still visible (already-passed sign) or only the back (not for ego)?
+4. **C5 Signpost direction**: signboard angle + post position + road markings (stop line, crosswalk, lane arrows) all agree that the sign faces ego's approach? Ignore vehicle-proximity evidence.
+5. **C6 Lane scope**: is the sign lane-specific? If so, is ego in the targeted lane?
+6. **C7 Driving-command cross-check**: does ego's current command (Go straight / Turn Left / Turn Right / U-Turn / etc.) match the action the sign governs? A sign prohibiting ego's intended action is CRITICAL; a sign describing a maneuver ego is NOT making is N/A.
 
-**Decision:** ALL three yes → APPLIES to ego. Any "no" → does NOT apply.
+**Decision**: A sign is marked "Applies to ego: y" ONLY if ALL of C1-C7 pass.
+Any failure → "Applies to ego: n" with the failing check cited in the Reason field.
 
 **Step 4: SIGN PRIORITY RESOLUTION**
 
@@ -463,16 +555,16 @@ Based on the highest-priority applicable sign, state the ego obligation:
 [LANE] Position: {{lane}} | Evidence: {{markings}}
 
 [SIGN-SCAN]
-  Image 1: {{sign type + text/symbol, or "No sign"}} | Mount: {{location}} | Orientation: {{faces ego/side/back/N/A}} | Applies to ego: {{y/n/uncertain}}
+  Image 1: {{sign type + text/symbol, or "No sign"}} | Mount: {{roadside/median/gantry/overpass/post}} | Orientation: {{faces ego/skewed/edge-on/rear/N/A}} | Stream: {{ego-direction/oncoming/cross-traffic/unknown}} | Lane scope: {{all lanes/ego's lane/right-turn lane/left-turn lane/through lane/other}} | Applies to ego: {{y/n/uncertain}} | Reason: {{brief explanation referencing C2-C7 that led to the y/n decision, including ego's driving command when relevant}}
   Image 2: {{...}}
   Image 3: {{...}}
   Image 4: {{...}}
   Image 5: {{...}}
   Image 6: {{...}}
 
-[SIGN-APPLICABLE] {{comma-separated list of ego-applicable signs, or "None"}}
+[SIGN-APPLICABLE] {{comma-separated list of ego-applicable signs with brief context, e.g. "STOP (Image 2, ego approach)", or "None"}}
 [SIGN-PRIORITY] {{highest-priority category: Regulatory / Warning / Guide / None}}
-[SIGN-ACTION] {{derived ego obligation — e.g., "Stop required", "Max speed 50", "No right turn permitted", "None"}}
+[SIGN-ACTION] {{derived ego obligation — e.g., "Stop required", "Max speed 50", "No right turn permitted (ego intends to turn right — CRITICAL)", "None"}}
 [SIGN-CONFIDENCE] {{HIGH / MEDIUM / LOW / NONE}}
 
 === END ===
@@ -482,10 +574,13 @@ Based on the highest-priority applicable sign, state the ego obligation:
 1. **Scan ALL 6 views** — signs can appear in front OR rear cameras
 2. **Back-of-sign ≠ sign for ego** — a blank metal panel means the sign faces the other direction
 3. **Cross-street signs ≠ ego's signs** — perpendicular-road signs do NOT apply to ego
-4. **Apply the three-condition Ego-Relevance Test** before declaring a sign applicable
-5. **Regulatory > Warning > Guide** — the regulatory sign dictates action when multiple apply
-6. **Ignore pedestrian signals** — they are covered by the signal analysis module, not here
-7. **Report "None"** — when no ego-applicable signs exist, do NOT fabricate
+4. **Signboard angle > vehicle proximity** — a face-on signboard is for the approach it faces, regardless of which vehicles happen to drive near it
+5. **Lane-specific signs apply only to the targeted lane** — arrow signs, lane-specific speed limits on gantries, turn-only lanes (see C6)
+6. **Cross-check against driving command** — "No Left Turn" is irrelevant when ego goes straight; "Straight Only" arrow is irrelevant (and may warn wrong-lane) when ego is turning (see C7)
+7. **Road markings corroborate** — stop lines, crosswalks, lane arrows indicate which approach a sign pertains to
+8. **Regulatory > Warning > Guide** — the regulatory sign dictates action when multiple applicable signs exist
+9. **Ignore pedestrian signals** — they are covered by the signal analysis module, not here
+10. **Report "None"** — when no ego-applicable signs exist, do NOT fabricate
 ---
 ## TASK
 Extract traffic signs and report per the output format above.
