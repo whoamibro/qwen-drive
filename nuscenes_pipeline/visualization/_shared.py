@@ -288,7 +288,35 @@ CAMERA_ORDER = [
 REAR_INDICES = {3, 4, 5}
 
 
-def build_panoramic(sample, loader, bbox_overlays=None, resize_factor=2):
+def detect_bbox_coord_width(bboxes_iter):
+    """Infer bbox coordinate-space image width from a sequence of bboxes.
+
+    Args:
+        bboxes_iter: iterable of (img_num, x1, y1, x2, y2, label) tuples
+
+    Returns:
+        One of {400, 800, 1600} based on the max x value, or None if empty.
+    """
+    max_x = 0
+    for tup in bboxes_iter:
+        # Accept (x1,y1,x2,y2,label) or (img_num,x1,y1,x2,y2,label)
+        if len(tup) == 5:
+            x1, _, x2, _, _ = tup
+        else:
+            _, x1, _, x2, _, _ = tup
+        if x2 > max_x:
+            max_x = x2
+    if max_x == 0:
+        return None
+    if max_x > 800:
+        return 1600
+    if max_x > 400:
+        return 800
+    return 400
+
+
+def build_panoramic(sample, loader, bbox_overlays=None, resize_factor=2,
+                    bbox_coord_width=None):
     """
     Build 6-view panoramic images (as a list of base64 data URIs in egocentric order).
 
@@ -298,8 +326,12 @@ def build_panoramic(sample, loader, bbox_overlays=None, resize_factor=2):
         bbox_overlays: dict of {img_num_1based: [(bboxes, color), ...]}
                        bboxes is list of (x1,y1,x2,y2,label).
                        Allows layering multiple bbox sets (e.g., green + pink).
-        resize_factor: bbox coords are assumed to be in the resized image space.
-                       If resize_factor=2, bbox coords are in width/2 x height/2 space.
+        resize_factor: Display resize factor. Controls the output image size
+                       (original_width // resize_factor per view).
+        bbox_coord_width: The image width in which the bbox coordinates are
+                          expressed. If different from the displayed image width,
+                          bboxes are scaled proportionally. If None, assumes
+                          bboxes are already in the displayed image space.
 
     Returns:
         List of 6 base64 data URI strings in egocentric order.
@@ -320,18 +352,40 @@ def build_panoramic(sample, loader, bbox_overlays=None, resize_factor=2):
             alt_path = img_path.lstrip('./')
             img = Image.open(alt_path).convert('RGB')
 
-        # Resize to match the bbox coordinate space (usually /2)
+        # Resize for display (does NOT have to match bbox coord space)
         if resize_factor > 1:
             w, h = img.size
             img = img.resize((w // resize_factor, h // resize_factor), Image.LANCZOS)
 
-        # Draw bbox overlays (before flipping rear cameras so coords stay native)
-        for bboxes, color in bbox_overlays.get(img_num, []):
-            draw_bboxes_on_image(img, bboxes, color)
-
-        # Flip rear cameras for egocentric consistency
-        if view_idx in REAR_INDICES:
+        # Flip rear cameras FIRST for egocentric consistency, so we draw bboxes
+        # with readable (non-mirrored) text in the final orientation.
+        is_rear = view_idx in REAR_INDICES
+        if is_rear:
             img = img.transpose(Image.FLIP_LEFT_RIGHT)
+
+        display_w = img.size[0]
+        # Scale bboxes from their native coord space to the displayed image space
+        if bbox_coord_width and bbox_coord_width != display_w:
+            bbox_scale = display_w / bbox_coord_width
+        else:
+            bbox_scale = 1.0
+
+        def _scale(bs):
+            if bbox_scale == 1.0:
+                return bs
+            return [(int(x1 * bbox_scale), int(y1 * bbox_scale),
+                     int(x2 * bbox_scale), int(y2 * bbox_scale), label)
+                    for x1, y1, x2, y2, label in bs]
+
+        def _flip(bs):
+            return [(display_w - x2, y1, display_w - x1, y2, label)
+                    for x1, y1, x2, y2, label in bs]
+
+        # Draw bbox overlays. Scale first (to display space), then flip x for rear.
+        for bboxes, color in bbox_overlays.get(img_num, []):
+            scaled = _scale(bboxes)
+            to_draw = _flip(scaled) if is_rear else scaled
+            draw_bboxes_on_image(img, to_draw, color)
 
         panoramic_b64.append(image_to_base64(img))
 

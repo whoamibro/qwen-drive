@@ -309,18 +309,55 @@ def api_sample():
         if idx is not None:
             a_by_img.setdefault(idx, []).append((x1, y1, x2, y2, label))
 
+    # Detect bbox coord space from all parsed bboxes (supports pre- and
+    # post-scale_bbox_coords datasets: 400, 800, or 1600).
+    all_bboxes_flat = [(x1, y1, x2, y2, lbl) for lst in list(q_by_img.values()) + list(a_by_img.values()) for (x1, y1, x2, y2, lbl) in lst]
+    bbox_coord_width = None
+    if all_bboxes_flat:
+        max_x = max(b[2] for b in all_bboxes_flat)
+        if max_x > 800:
+            bbox_coord_width = 1600
+        elif max_x > 400:
+            bbox_coord_width = 800
+        else:
+            bbox_coord_width = 400
+
     images_b64 = []
     for i, img_path in enumerate(image_paths):
         try:
             img = Image.open(img_path).convert('RGB')
             w, h = img.size
             img = img.resize((w // 2, h // 2), Image.LANCZOS)
-            if i in q_by_img:
-                img = draw_bboxes_on_image(img, q_by_img[i], color=(46, 204, 113))
-            if i in a_by_img:
-                img = draw_bboxes_on_image(img, a_by_img[i], color=(233, 30, 140))
-            if i in REAR_INDICES:
+            # Flip rear cameras FIRST so bbox text stays readable after flip,
+            # then flip bbox x-coords so rectangles align with the flipped view.
+            is_rear = i in REAR_INDICES
+            if is_rear:
                 img = img.transpose(Image.FLIP_LEFT_RIGHT)
+            display_w = img.size[0]
+
+            # Scale bboxes from their native coord space to the displayed image space.
+            scale = (display_w / bbox_coord_width) if bbox_coord_width and bbox_coord_width != display_w else 1.0
+
+            def _scale_bboxes(bs):
+                if scale == 1.0:
+                    return bs
+                return [(int(x1 * scale), int(y1 * scale), int(x2 * scale), int(y2 * scale), label)
+                        for x1, y1, x2, y2, label in bs]
+
+            def _flip_bboxes(bs):
+                return [(display_w - x2, y1, display_w - x1, y2, label)
+                        for x1, y1, x2, y2, label in bs]
+
+            if i in q_by_img:
+                bs = _scale_bboxes(q_by_img[i])
+                if is_rear:
+                    bs = _flip_bboxes(bs)
+                img = draw_bboxes_on_image(img, bs, color=(46, 204, 113))
+            if i in a_by_img:
+                bs = _scale_bboxes(a_by_img[i])
+                if is_rear:
+                    bs = _flip_bboxes(bs)
+                img = draw_bboxes_on_image(img, bs, color=(233, 30, 140))
             images_b64.append(image_to_base64(img))
         except Exception as e:
             ph = Image.new('RGB', (400, 225), (40, 40, 40))

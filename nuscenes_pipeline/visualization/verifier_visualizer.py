@@ -34,6 +34,7 @@ from flask import Flask, render_template_string, request, jsonify
 from nuscenes_pipeline.core.nuscenes_data_loader import NuScenesDataLoader
 from nuscenes_pipeline.visualization._shared import (
     parse_bboxes_seed_format, generate_bev, build_panoramic,
+    detect_bbox_coord_width,
 )
 
 
@@ -329,9 +330,14 @@ def api_sample():
             bbox_by_img[img_num].append((x1, y1, x2, y2, label))
     bbox_overlays = {img_num: [(bboxes, '#00ffff')] for img_num, bboxes in bbox_by_img.items() if bboxes}
 
+    # Detect the coord space the bboxes live in (e.g., 400 if seed data was
+    # generated with resize_factor=4 — which is the module default).
+    bbox_coord_width = detect_bbox_coord_width(obj_bboxes)
+
     # Build panoramic + BEV
     panoramic = build_panoramic(sample, loader, bbox_overlays=bbox_overlays,
-                                 resize_factor=_config["resize_factor"])
+                                 resize_factor=_config["resize_factor"],
+                                 bbox_coord_width=bbox_coord_width)
     bev = generate_bev(sample, loader, bev_range=_config["bev_range"])
 
     # Parse analysis responses into blocks
