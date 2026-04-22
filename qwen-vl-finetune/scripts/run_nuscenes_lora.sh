@@ -13,6 +13,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$PROJECT_ROOT"
 
+# NCCL timeout + telemetry (prevents 10-min default timeout when eval/save runs long)
+export NCCL_TIMEOUT=3600
+export TORCH_NCCL_TIMEOUT_SEC=3600
+export TORCH_NCCL_TRACE_BUFFER_SIZE=2000
+export TORCH_NCCL_DUMP_ON_TIMEOUT=1
+
 # Distributed training configuration
 MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 MASTER_PORT=${MASTER_PORT:-$(shuf -i 20001-29999 -n 1)}
@@ -27,7 +33,9 @@ MODEL_PATH="ckpts/qwen3_vl_8b_instruct"
 
 # Data paths
 TRAIN_DATA="$PROJECT_ROOT/sft_dataset/sft_train_no_objlist.json"
-VAL_DATA="$PROJECT_ROOT/sft_dataset/sft_val_no_objlist.json"
+# Small held-out subset (300 samples) for in-training eval.
+# Full val set (sft_val_no_objlist.json, 35K samples) is reserved for final evaluation.
+VAL_DATA="$PROJECT_ROOT/sft_dataset/sft_val_small.json"
 
 # Output
 OUTPUT_DIR="$PROJECT_ROOT/output_nuscenes_lora_no_objlist"
@@ -80,7 +88,7 @@ torchrun \
     --output_dir "$OUTPUT_DIR" \
     --num_train_epochs $NUM_EPOCHS \
     --per_device_train_batch_size $BATCH_SIZE \
-    --per_device_eval_batch_size 1 \
+    --per_device_eval_batch_size 2 \
     --gradient_accumulation_steps $GRAD_ACCUM \
     --max_pixels 50176 \
     --min_pixels 784 \
