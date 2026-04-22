@@ -1,17 +1,23 @@
+# Python caches
 __pycache__/
 *.pyc
-ckpts/
-risk_assessment_results/
-traffic_analysis_results/
-traffic_signal_analysis_results/
-traffic_sign_results/
-qa_results/
-qa_outputs/
-sft_dataset/
-sft_dataset_v*/
-output_nuscenes_*/
-question_selector_logs/
-answer_generator_logs/
+
+# Local data symlinks and checkpoints (no trailing slash = also matches symlinks)
+ckpts
+data
+risk_assessment_results
+traffic_analysis_results
+traffic_signal_analysis_results
+traffic_sign_results
+qa_results
+qa_outputs
+sft_dataset
+sft_dataset_v*
+output_nuscenes_*
+question_selector_logs
+answer_generator_logs
+
+# Logs and archives
 *.log
 *.tar.gz
 wandb/
