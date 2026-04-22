@@ -175,7 +175,10 @@ def main():
                         default=os.environ.get("NUSCENES_PKL_PATH", "nuscenes2d_ego_temporal_infos_val.pkl"))
     parser.add_argument('--data_root', type=str,
                         default=os.environ.get("NUSCENES_DATA_ROOT", "/home/yongjinjeon/datasets/nuscenes"))
-    parser.add_argument('--resize_factor', type=int, default=2)
+    parser.add_argument('--resize_factor', type=int, default=1,
+                        help='Resize factor for bbox coordinate space. '
+                             '1 = full resolution 1600x900 (default); '
+                             '2 = half resolution 800x450.')
     args = parser.parse_args()
 
     input_dir = args.input_dir
@@ -207,7 +210,7 @@ def main():
             scene_data = analyzer.analyze_sample(
                 sample_idx, max_distance=50.0, rear_filter_distance=20.0
             )
-            obj_mapping = build_obj_mapping(sample, scene_data, resize_factor=2)
+            obj_mapping = build_obj_mapping(sample, scene_data, resize_factor=args.resize_factor)
         except Exception as e:
             print(f"  Warning: Failed to build mapping for sample {sample_idx}: {e}")
             obj_mapping = {}
