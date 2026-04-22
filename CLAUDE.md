@@ -106,8 +106,9 @@ With `resize_factor=2` and `max_pixels=50176`, an 1600×900 image becomes 800×4
 
 ### Coordinate space of bbox labels
 - `transform_obj_to_bbox.py --resize_factor N` produces bboxes in the image space AFTER dividing original dimensions by N.
-- Default N=2 → bboxes in 800×450 space. ViT input is further downscaled by smart_resize. Training is consistent because it's deterministic, but label precision is bounded by ViT input resolution.
-- There's an unused `scale_bbox_coords.py` postprocessing module in the repo for offline coord scaling. Online scaling at training load time was prototyped then reverted.
+- **Default N=1** → bboxes in full 1600×900 space (matches the original nuScenes image resolution). ViT input is then downscaled by the processor's `smart_resize` to whatever `max_pixels` allows; training is consistent as long as the same pipeline is used at inference.
+- Older runs used N=2 (800×450). If you have legacy data in 800×450 space, use `scale_bbox_coords.py --scale 2` to scale up to 1600×900, OR re-run `transform_obj_to_bbox` with the new default.
+- Online scaling at training load time was prototyped then reverted — we keep labels in a fixed coord space instead.
 
 ---
 
@@ -140,7 +141,7 @@ Point `VAL_DATA` in the training shell script at this file. Reserve the full val
 ### Raising `max_pixels`
 - With `resize_factor=2` (800×450 input), raising `max_pixels` past 360,000 is a no-op because the input is the binding constraint.
 - With `resize_factor=1` (full 1600×900 input), `max_pixels=802816` gives ~644×1176 per view (966 tokens/view × 6 = 5,796 vision tokens per sample). Still within `model_max_length=8192` but ~5× step time.
-- If switching to `resize_factor=1`, regenerate bbox labels with `transform_obj_to_bbox --resize_factor 1` OR use the `scale_bbox_coords.py` script.
+- Bbox labels are now in 1600×900 space by default (after `transform_obj_to_bbox.py --resize_factor 1`, which is the default), so no label-space change is needed when switching between `resize_factor` values at training time.
 
 ---
 
@@ -164,11 +165,26 @@ python -m nuscenes_pipeline.postprocessing.cleanse_obj_references \
 # Step 4: Fix motion state claims against GT velocity
 python -m nuscenes_pipeline.postprocessing.fix_motion_states \
     --data_dir sft_dataset --data_root ./data/nuscenes
+
+# Step 5: Convert to Qwen3-VL unified JSON format (reasoning + grounding + answer)
+python -m nuscenes_pipeline.postprocessing.convert_to_qwen3vl_format \
+    --input sft_dataset/sft_train_no_objlist.json \
+    --output sft_dataset/sft_train_qwen3vl.json
+python -m nuscenes_pipeline.postprocessing.convert_to_qwen3vl_format \
+    --input sft_dataset/sft_val_no_objlist.json \
+    --output sft_dataset/sft_val_qwen3vl.json
 ```
 
 `--data_root ./data/nuscenes` is required because pkl image paths are `data/nuscenes/samples/...` — the scripts strip `data/nuscenes/` from the relative path, so `data_root` must point at `./data/nuscenes` (not the project root).
 
 `cleanse_obj_references.py` now handles both singular and plural forms: `OBJ ID`, `OBJ IDs`, `object list`, `object lists`.
+
+**Step 5 (Qwen3-VL format)**:
+- Legacy output (`sft_{train,val}_no_objlist.json`) embeds bboxes inline in prose — deprecated Qwen-VL 1 style.
+- New output (`sft_{train,val}_qwen3vl.json`) has gpt value as a unified JSON string with keys: `reasoning` (bullet-point string with bboxes removed), `grounding` (list of `{image_idx, camera, bbox_2d, label}` objects), `answer` (short factual response).
+- Merges the `from: "system"` turn into the next human turn's preamble (Qwen3-VL ignores system turns).
+- Idempotency: writes `.format_qwen3vl` marker in the output directory.
+- Train with `--data_path sft_dataset/sft_train_qwen3vl.json` + leave `--enable_reasoning` as default (False). The model learns to emit the unified JSON directly.
 
 ---
 
