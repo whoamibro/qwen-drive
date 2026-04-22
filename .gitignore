@@ -3,9 +3,21 @@ __pycache__/
 ckpts/
 risk_assessment_results/
 traffic_analysis_results/
+traffic_signal_analysis_results/
+traffic_sign_results/
 qa_results/
 qa_outputs/
 sft_dataset/
+sft_dataset_v*/
 output_nuscenes_*/
+question_selector_logs/
+answer_generator_logs/
 *.log
+*.tar.gz
 wandb/
+
+# Vendored third-party repos (cloned locally for reference)
+Qwen-VL-Series-Finetune/
+
+# Stray CLI artifacts
+--*
