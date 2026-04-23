@@ -35,6 +35,7 @@ LOG_DIR="answer_generator_logs"
 RISK_RESULTS_DIR="risk_assessment_results"
 TRAFFIC_RESULTS_DIR="traffic_signal_analysis_results"
 SIGN_RESULTS_DIR="traffic_sign_results"
+DISAGREEMENT_DIR="prior_disagreements"
 
 echo "================================================================================"
 echo "Answer Generator - Stage 3"
@@ -80,7 +81,8 @@ python3 -m nuscenes_pipeline.modules.answer_generator \
     --risk_results_dir "$RISK_RESULTS_DIR" \
     --traffic_results_dir "$TRAFFIC_RESULTS_DIR" \
     --sign_results_dir "$SIGN_RESULTS_DIR" \
-    --answer_mode "$ANSWER_MODE"
+    --answer_mode "$ANSWER_MODE" \
+    --disagreement_dir "$DISAGREEMENT_DIR"
 
 echo ""
 echo "================================================================================"

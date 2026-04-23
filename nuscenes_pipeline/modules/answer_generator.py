@@ -128,6 +128,49 @@ placeholder combinations:
 
 
 ========================================================================
+  PRIOR APPLICABILITY VERIFICATION RULE
+========================================================================
+
+The user prompt may include PRIOR ANALYSIS sections:
+  - Stage 1A (Risk Assessment): GROUND TRUTH — derived from 3D detection +
+    geometry. Accept all claims unconditionally.
+  - Stage 1B (Traffic Signal Analysis): HIGH-CONFIDENCE REFERENCE (~90%+).
+  - Stage 1C (Traffic Sign Extraction): HIGH-CONFIDENCE REFERENCE (~90%+).
+
+For signal and sign priors, before accepting their ego-applicability claims,
+run an INDEPENDENT orientation + road-alignment check against the camera
+images:
+
+FOR SIGNS (each "[SIGN-SCAN] Image N: ... Applies to ego: y" entry in Stage 1C):
+  - Is the signboard face-on (readable proportions) or edge-on / rear?
+  - Is the post on ego's road, or on a perpendicular cross-street?
+  - Does the sign's scope match ego's driving command? (e.g., "No Left Turn"
+    for a "Go straight" ego is NOT ego's obligation)
+
+FOR SIGNALS (the "[SELECTED] Image: N | Signal: ..." claim in Stage 1B):
+  - Does the selected signal face ego's approach (light panels visible head-on)?
+  - Are vehicles near it traveling along ego's path, or across it?
+
+Decision rule:
+  1. AGREE with prior → use the prior's claim in your answer.
+  2. DISAGREE with prior → STILL USE THE PRIOR'S CLAIM as the final answer
+     (for dataset consistency), BUT emit a "prior_disagreements" list in the
+     output JSON alongside the answer. Each entry:
+       {
+         "source": "signal" | "sign",
+         "image_idx": <int 1-6>,
+         "object": "<brief identifier, e.g. 'STOP sign', 'red traffic light'>",
+         "prior_says": "applies to ego: y" | "applies to ego: n" | "selected" | "not selected",
+         "vlm_says": "applies to ego: y" | "applies to ego: n" | "selected" | "not selected",
+         "evidence": "<one sentence citing what the images show>"
+       }
+
+Omit "prior_disagreements" entirely when there are no mismatches.
+Do NOT use this field for signal-STATE disagreements (red/yellow/green) or
+for sign-category disagreements — only for EGO-APPLICABILITY claims.
+
+
+========================================================================
   SECTION 1: PLACEHOLDER CLASSIFICATION
 ========================================================================
 
@@ -1195,6 +1238,7 @@ def build_verification_prompt(
 
 NOTES:
 - """ + order_note + """
+- "prior_disagreements" is OPTIONAL on positive/contrastive/vlm_proposed_contrastives. Include it ONLY when your independent check disagrees with a Stage 1B/1C ego-applicability claim (see PRIOR APPLICABILITY VERIFICATION RULE in the system prompt). Schema per entry: {"source": "signal"|"sign", "image_idx": int, "object": str, "prior_says": str, "vlm_says": str, "evidence": str}. The answer itself must still follow the prior's claim.
 - "mcq_options" is REQUIRED for mcq answer_type; omit for other types.
 - For mcq, "answer" is the correct option LETTER(S): single letter ("B") or comma-separated letters ("A,C,D").
 - The number of correct options is pre-assigned per pair in `num_correct_positive` / `num_correct_contrastive` (1-5, sampled randomly). The `answer` string must contain exactly that many letters.
@@ -1262,6 +1306,7 @@ If contrastive is impossible: "contrastive": null, "contrastive_skip_reason": "<
 }
 
 NOTES:
+- "prior_disagreements" is OPTIONAL on positive/contrastive/vlm_proposed_contrastives. Include it ONLY when your independent check disagrees with a Stage 1B/1C ego-applicability claim (see PRIOR APPLICABILITY VERIFICATION RULE in the system prompt). Schema per entry: {"source": "signal"|"sign", "image_idx": int, "object": str, "prior_says": str, "vlm_says": str, "evidence": str}. The answer itself must still follow the prior's claim.
 - "mcq_options" is REQUIRED for mcq answer_type; omit for other types.
 - For mcq, "answer" is the correct option LETTER(S): single letter ("B") or comma-separated letters ("A,C,D").
 - The number of correct options is pre-assigned per pair in `num_correct_positive` / `num_correct_contrastive` (1-5, sampled randomly). The `answer` string must contain exactly that many letters.
@@ -1502,6 +1547,7 @@ def build_qa_generation_prompt(
 
 NOTES:
 - IMPORTANT: Put 'reasoning' BEFORE 'answer' in every instance. Fill in the answer AFTER writing the reasoning bullets, so the answer is derived from the reasoning (not justified after-the-fact).
+- "prior_disagreements" is OPTIONAL on positive/contrastive/vlm_proposed_contrastives. Include it ONLY when your independent check disagrees with a Stage 1B/1C ego-applicability claim (see PRIOR APPLICABILITY VERIFICATION RULE in the system prompt). Schema per entry: {"source": "signal"|"sign", "image_idx": int, "object": str, "prior_says": str, "vlm_says": str, "evidence": str}. The answer itself must still follow the prior's claim.
 - "mcq_options" is REQUIRED for mcq answer_type; omit for other types.
 - For mcq, "answer" is the correct option LETTER(S): single letter ("B") or comma-separated letters ("A,C,D").
 - The number of correct options is pre-assigned per pair in `num_correct_positive` / `num_correct_contrastive` (1-5, sampled randomly). The `answer` string must contain exactly that many letters.
@@ -1571,6 +1617,7 @@ If contrastive is impossible for a specific pair:
 }
 
 NOTES:
+- "prior_disagreements" is OPTIONAL on positive/contrastive/vlm_proposed_contrastives. Include it ONLY when your independent check disagrees with a Stage 1B/1C ego-applicability claim (see PRIOR APPLICABILITY VERIFICATION RULE in the system prompt). Schema per entry: {"source": "signal"|"sign", "image_idx": int, "object": str, "prior_says": str, "vlm_says": str, "evidence": str}. The answer itself must still follow the prior's claim.
 - "mcq_options" is REQUIRED for mcq answer_type; omit for other types.
 - For mcq, "answer" is the correct option LETTER(S): single letter ("B") or comma-separated letters ("A,C,D").
 - The number of correct options is pre-assigned per pair in `num_correct_positive` / `num_correct_contrastive` (1-5, sampled randomly). The `answer` string must contain exactly that many letters.
@@ -1646,6 +1693,7 @@ def _worker_process_sample(
     max_pairs_per_template: int = 3,
     temperature: float = 0.6,
     answer_mode: str = "a_r",
+    disagreement_dir: str = "prior_disagreements",
 ) -> Dict:
     """
     Worker function: load Stage 1 results, enrich with question bank data,
@@ -1729,6 +1777,7 @@ def _worker_process_sample(
         all_qa_results = []
         all_raw_responses = []
         total_pairs_count = 0
+        sample_disagreements = []  # collected across all templates for this sample
 
         for tmpl_idx, tmpl in enumerate(all_templates):
             tqdm.write(f"    [Sample {sample_idx}] Template {tmpl_idx + 1}/{total_templates}: {tmpl['category']} - \"{tmpl['template'][:50]}...\"")
@@ -1858,6 +1907,78 @@ def _worker_process_sample(
 
             all_qa_results.append(result)
 
+            # Extract prior_disagreements from each pair's positive/contrastive/vlm_proposed_contrastives
+            for pair in (result.get('pairs') or []):
+                if not isinstance(pair, dict):
+                    continue
+                pair_id = pair.get('pair_id')
+                # positive + contrastive
+                for role in ('positive', 'contrastive'):
+                    section = pair.get(role)
+                    if not isinstance(section, dict):
+                        continue
+                    disagreements = section.get('prior_disagreements')
+                    if not isinstance(disagreements, list) or not disagreements:
+                        continue
+                    for d in disagreements:
+                        if not isinstance(d, dict):
+                            continue
+                        sample_disagreements.append({
+                            'template_idx': tmpl.get('template_idx', tmpl_idx + 1),
+                            'q_key': tmpl.get('q_key'),
+                            'category': tmpl['category'],
+                            'template': tmpl.get('template', ''),
+                            'pair_id': pair_id,
+                            'pair_type': role,
+                            'question': section.get('instantiated_question', ''),
+                            'prior_disagreement': d,
+                            'vlm_response': {
+                                'reasoning': section.get('reasoning', ''),
+                                'grounding': section.get('grounding', []),
+                                'answer': section.get('answer', ''),
+                            },
+                        })
+                # vlm_proposed_contrastives (list of sections)
+                for idx_prop, section in enumerate(pair.get('vlm_proposed_contrastives', []) or []):
+                    if not isinstance(section, dict):
+                        continue
+                    disagreements = section.get('prior_disagreements')
+                    if not isinstance(disagreements, list) or not disagreements:
+                        continue
+                    for d in disagreements:
+                        if not isinstance(d, dict):
+                            continue
+                        sample_disagreements.append({
+                            'template_idx': tmpl.get('template_idx', tmpl_idx + 1),
+                            'q_key': tmpl.get('q_key'),
+                            'category': tmpl['category'],
+                            'template': tmpl.get('template', ''),
+                            'pair_id': pair_id,
+                            'pair_type': f'vlm_proposed_contrastive[{idx_prop}]',
+                            'question': section.get('instantiated_question', ''),
+                            'prior_disagreement': d,
+                            'vlm_response': {
+                                'reasoning': section.get('reasoning', ''),
+                                'grounding': section.get('grounding', []),
+                                'answer': section.get('answer', ''),
+                            },
+                        })
+
+        # 8.5 If any prior-vs-VLM disagreements were flagged, persist them to
+        #     prior_disagreements/sample_{idx}_disagreements.json (outside qa_results/)
+        if sample_disagreements:
+            os.makedirs(disagreement_dir, exist_ok=True)
+            dis_path = os.path.join(
+                disagreement_dir, f"sample_{sample_idx}_disagreements.json"
+            )
+            with open(dis_path, 'w') as f:
+                json.dump({
+                    'sample_idx': sample_idx,
+                    'timestamp': datetime.now().isoformat(),
+                    'total_disagreements': len(sample_disagreements),
+                    'disagreements': sample_disagreements,
+                }, f, indent=2, ensure_ascii=False)
+
         # 9. Save output
         output_data = {
             'sample_idx': sample_idx,
@@ -1908,6 +2029,60 @@ def _worker_process_sample(
             'traceback': traceback.format_exc(),
             'timestamp': datetime.now().isoformat(),
         }
+
+
+def _aggregate_disagreements(disagreement_dir: str):
+    """Scan disagreement_dir for per-sample *_disagreements.json files and
+    return a summary dict. Returns None if the directory doesn't exist or has
+    no disagreement files."""
+    if not os.path.isdir(disagreement_dir):
+        return None
+    pattern = re.compile(r'^sample_(\d+)_disagreements\.json$')
+    files = [f for f in os.listdir(disagreement_dir) if pattern.match(f)]
+    if not files:
+        return None
+
+    total_disagreements = 0
+    by_source = {}
+    by_category = {}
+    by_mismatch = {}
+    sample_indices = []
+
+    for fname in files:
+        m = pattern.match(fname)
+        if not m:
+            continue
+        idx = int(m.group(1))
+        try:
+            with open(os.path.join(disagreement_dir, fname), 'r') as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            continue
+        disagreements = data.get('disagreements', [])
+        if not disagreements:
+            continue
+        sample_indices.append(idx)
+        for entry in disagreements:
+            total_disagreements += 1
+            prior = entry.get('prior_disagreement', {})
+            source = prior.get('source', 'unknown')
+            by_source[source] = by_source.get(source, 0) + 1
+            category = entry.get('category', 'unknown')
+            by_category[category] = by_category.get(category, 0) + 1
+            prior_says = prior.get('prior_says', '?')
+            vlm_says = prior.get('vlm_says', '?')
+            key = f"{source}:{prior_says}→{vlm_says}"
+            by_mismatch[key] = by_mismatch.get(key, 0) + 1
+
+    return {
+        'generated_at': datetime.now().isoformat(),
+        'total_samples_with_disagreements': len(sample_indices),
+        'total_disagreements': total_disagreements,
+        'by_source': dict(sorted(by_source.items())),
+        'by_category': dict(sorted(by_category.items())),
+        'by_mismatch_type': dict(sorted(by_mismatch.items())),
+        'sample_indices_with_disagreements': sorted(sample_indices),
+    }
 
 
 def _worker_wrapper(args):
@@ -2016,6 +2191,10 @@ def main():
                              "'a_r' (default) = answer first, then reasoning (chain-of-thought style); "
                              "'r_a' = reasoning first, then answer (autolabel style — the VLM derives the "
                              "answer from its reasoning rather than justifying a pre-chosen answer)")
+    parser.add_argument("--disagreement_dir", type=str, default="prior_disagreements",
+                        help="Directory for per-sample prior_disagreements JSON files. "
+                             "Written only when the VLM flags a disagreement with Stage 1B/1C "
+                             "ego-applicability claims. Separate from --output_dir.")
 
     # Multiprocessing
     parser.add_argument("--num_workers", type=int, default=8,
@@ -2070,6 +2249,7 @@ def main():
     log_and_print(f"  Temperature: {args.temperature}")
     log_and_print(f"  Max pairs per template: {args.max_pairs}")
     log_and_print(f"  Answer mode: {args.answer_mode} ({'reasoning first, then answer' if args.answer_mode == 'r_a' else 'answer first, then reasoning'})")
+    log_and_print(f"  Disagreement dir: {args.disagreement_dir}")
     log_and_print(f"  Output dir: {args.output_dir}")
     log_and_print(f"  Log file: {log_file}")
     log_and_print(f"  Camera order: FL, F, FR, RL, R, RR (egocentric)")
@@ -2107,6 +2287,7 @@ def main():
             args.max_pairs,
             args.temperature,
             args.answer_mode,
+            args.disagreement_dir,
         )
         for idx in sample_indices
     ]
@@ -2187,6 +2368,18 @@ def main():
         with open(failed_file, "w") as f:
             f.write("\n".join(map(str, sorted(failed_indices))))
         log_and_print(f"    Saved to: {failed_file}")
+
+    # Aggregate disagreement summary across all workers' per-sample files
+    summary = _aggregate_disagreements(args.disagreement_dir)
+    if summary is not None:
+        summary_path = os.path.join(args.disagreement_dir, "_summary.json")
+        with open(summary_path, "w") as f:
+            json.dump(summary, f, indent=2, ensure_ascii=False)
+        log_and_print(f"\n  PRIOR DISAGREEMENTS:")
+        log_and_print(f"    Samples with disagreements: {summary['total_samples_with_disagreements']}")
+        log_and_print(f"    Total disagreements: {summary['total_disagreements']}")
+        log_and_print(f"    By source: {summary['by_source']}")
+        log_and_print(f"    Summary saved to: {summary_path}")
 
     log_and_print(f"{'=' * 80}\n")
 

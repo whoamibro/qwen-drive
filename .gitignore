@@ -16,6 +16,7 @@ sft_dataset_v*
 output_nuscenes_*
 question_selector_logs
 answer_generator_logs
+prior_disagreements
 
 # Logs and archives
 *.log
