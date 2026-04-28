@@ -182,7 +182,7 @@ python -m nuscenes_pipeline.postprocessing.convert_to_qwen3vl_format \
 **Step 5 (Qwen3-VL format)**:
 - Legacy output (`sft_{train,val}_no_objlist.json`) embeds bboxes inline in prose — deprecated Qwen-VL 1 style.
 - New output (`sft_{train,val}_qwen3vl.json`) has gpt value as a unified JSON string with keys: `reasoning` (bullet-point string with bboxes removed), `grounding` (list of `{image_idx, camera, bbox_2d, label}` objects), `answer` (short factual response).
-- Merges the `from: "system"` turn into the next human turn's preamble (Qwen3-VL ignores system turns).
+- **Preserves `from: "system"` as its own turn** (does not merge into human). Our training pipeline `train_nuscenes_qwen3vl.py` supports system turns natively via `preprocess_with_system_prompt()` — system content is rendered as `<|im_start|>system\n...<|im_end|>\n`, masked with `IGNORE_INDEX` so it forms prefix context but not loss targets. Note: this differs from the official `qwen-vl-finetune` and `Qwen-VL-Series-Finetune` repos, which drop or mishandle per-sample system turns; we use our custom training script.
 - Idempotency: writes `.format_qwen3vl` marker in the output directory.
 - Train with `--data_path sft_dataset/sft_train_qwen3vl.json` + leave `--enable_reasoning` as default (False). The model learns to emit the unified JSON directly.
 

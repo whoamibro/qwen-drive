@@ -10,12 +10,19 @@ Input format (legacy, inline bbox in prose)
       {"from": "gpt",    "value": "No. - pedestrian (Image 1 (Front-left) bbox[982,426,1128,684]) is present, ... - Answer: No"}
     ]
 
-Output format (unified JSON in gpt.value)
------------------------------------------
+Output format (unified JSON in gpt.value, with system preserved)
+----------------------------------------------------------------
     "conversations": [
-      {"from": "human", "value": "<system prompt merged>\n...<image>...TASK: ..."},
-      {"from": "gpt",   "value": "{\n  \"reasoning\": \"- ...\",\n  \"grounding\": [{\"image_idx\": 1, \"camera\": \"Front-left\", \"bbox_2d\": [982, 426, 1128, 684], \"label\": \"pedestrian\"}],\n  \"answer\": \"No\"\n}"}
+      {"from": "system", "value": "You are an autonomous driving..."},
+      {"from": "human",  "value": "<image>...<image>\n...TASK: ..."},
+      {"from": "gpt",    "value": "{\n  \"reasoning\": \"- ...\",\n  \"grounding\": [{\"image_idx\": 1, \"camera\": \"Front-left\", \"bbox_2d\": [982, 426, 1128, 684], \"label\": \"pedestrian\"}],\n  \"answer\": \"No\"\n}"}
     ]
+
+System turn handling: PRESERVED as its own turn (not merged into human).
+Our training pipeline `train_nuscenes_qwen3vl.py` supports `from: "system"`
+natively via `preprocess_with_system_prompt()`, which renders it as
+`<|im_start|>system\n...<|im_end|>\n` and masks the system tokens with
+IGNORE_INDEX so they form prefix context but not loss targets.
 
 The gpt.value is a JSON string that parses to:
     {
@@ -180,13 +187,18 @@ def convert_gpt_value(value: str) -> tuple[str, dict]:
 def convert_sample(sample: dict) -> tuple[dict, dict]:
     """Convert a single SFT sample to Qwen3-VL unified-JSON format.
 
+    The system turn (if present) is PRESERVED as its own turn — our training
+    pipeline (`train_nuscenes_qwen3vl.py`) supports `from: "system"` natively
+    via `preprocess_with_system_prompt()`, which renders it as
+    `<|im_start|>system\n...<|im_end|>\n` and masks the system tokens with
+    IGNORE_INDEX so they participate as prefix context but not as loss targets.
+
     Returns (new_sample, stats).
     """
     convs = sample.get("conversations", [])
     new_convs = []
-    system_content = None
     per_sample_stats = {
-        "system_merged": False,
+        "system_preserved": False,
         "gpt_turns": 0,
         "grounding_count": 0,
         "heuristic_used": None,
@@ -197,15 +209,12 @@ def convert_sample(sample: dict) -> tuple[dict, dict]:
         value = turn.get("value", "")
 
         if role == "system":
-            # Stash and defer to the next human turn
-            system_content = value
-            per_sample_stats["system_merged"] = True
+            # Preserve as a dedicated turn (do NOT merge into human).
+            new_convs.append({"from": "system", "value": value})
+            per_sample_stats["system_preserved"] = True
             continue
 
         if role == "human":
-            if system_content:
-                value = system_content + "\n\n" + value
-                system_content = None
             new_convs.append({"from": "human", "value": value})
             continue
 
@@ -219,10 +228,6 @@ def convert_sample(sample: dict) -> tuple[dict, dict]:
 
         # Unknown role — pass through unchanged
         new_convs.append(turn)
-
-    if system_content:
-        # System turn without a following human turn — edge case; prepend as a human preamble
-        new_convs.insert(0, {"from": "human", "value": system_content})
 
     new_sample = dict(sample)
     new_sample["conversations"] = new_convs
@@ -261,7 +266,7 @@ def main():
 
     stats = {
         "total": 0,
-        "system_merged": 0,
+        "system_preserved": 0,
         "with_grounding": 0,
         "without_grounding": 0,
         "total_bboxes": 0,
@@ -273,8 +278,8 @@ def main():
         new_sample, s = convert_sample(sample)
         new_data.append(new_sample)
         stats["total"] += 1
-        if s["system_merged"]:
-            stats["system_merged"] += 1
+        if s["system_preserved"]:
+            stats["system_preserved"] += 1
         if s["grounding_count"] > 0:
             stats["with_grounding"] += 1
         else:
@@ -285,7 +290,7 @@ def main():
 
     print("\n=== CONVERSION STATS ===")
     print(f"  Total samples:        {stats['total']:,}")
-    print(f"  System turns merged:  {stats['system_merged']:,}")
+    print(f"  System turns preserved: {stats['system_preserved']:,}")
     print(f"  With grounding:       {stats['with_grounding']:,} ({stats['with_grounding']*100/stats['total']:.1f}%)")
     print(f"  Without grounding:    {stats['without_grounding']:,} ({stats['without_grounding']*100/stats['total']:.1f}%)")
     print(f"  Total bboxes:         {stats['total_bboxes']:,}")
