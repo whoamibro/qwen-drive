@@ -18,7 +18,7 @@ Stage 1C  traffic_sign_extraction    ─┘
 
 - Stages 1A/1B/1C are independent and can run in parallel.
 - Stage 2 consumes 1A + 1B outputs as prior context for the `Dynamic_Agents_and_Risk_Assessment` and `Traffic_Signs_and_Signals` categories respectively.
-- Stage 3 consumes 1A + 1B + 1C outputs — 1C (sign) is prepended to **all 10 categories**, 1A only to `Dynamic_Agents_and_Risk_Assessment`, 1B only to `Traffic_Signs_and_Signals`.
+- Stage 3 consumes 1A + 1B + 1C outputs — 1B (signal) and 1C (sign) are prepended to **all 10 categories**; 1A (risk) is prepended only to `Dynamic_Agents_and_Risk_Assessment`.
 
 ### Module paths
 
@@ -61,17 +61,16 @@ Stage 1C  traffic_sign_extraction    ─┘
 - `--answer_mode {a_r, r_a}` — `a_r` (default) = answer-first-then-reasoning (chain-of-thought); `r_a` = reasoning-first-then-answer (autolabel style, VLM derives answer from reasoning rather than justifying a pre-chosen one).
 - `--sign_results_dir DIR` — Stage 1C output dir. Prepended to ALL 10 categories.
 - `--risk_results_dir DIR` — Stage 1A. Prepended only to `Dynamic_Agents_and_Risk_Assessment`.
-- `--traffic_results_dir DIR` — Stage 1B. Prepended only to `Traffic_Signs_and_Signals`.
+- `--traffic_results_dir DIR` — Stage 1B. Prepended to all 10 categories.
 
 ### Stage 3 prompt-prepend ordering (when multiple priors apply)
 
-Category-specific priors (risk/signal) are prepended AFTER sign, so they sit closer to the question body (higher recency = higher attention).
+Priors are prepended in order so the LAST one prepended sits FURTHEST from the question body. Risk (when applicable) is prepended first → signal next → sign last, which means sign sits furthest from the question body and risk sits closest.
 
 | Category | Nearest → furthest from question body |
 |---|---|
-| `Dynamic_Agents_and_Risk_Assessment` | base ← risk ← sign |
-| `Traffic_Signs_and_Signals` | base ← signal ← sign |
-| Other 8 categories | base ← sign |
+| `Dynamic_Agents_and_Risk_Assessment` | base ← risk ← signal ← sign |
+| Other 9 categories | base ← signal ← sign |
 
 ---
 

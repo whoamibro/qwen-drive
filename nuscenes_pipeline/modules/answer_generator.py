@@ -490,16 +490,16 @@ is not met.
 
 EXAMPLE (correct):
   Q: "Is the intersection clear of parked cars?"
-  A: "no"
   Reasoning: "No intersection is visible in any of the six camera views.
   Since the referenced location does not exist in this scene, the
   question cannot be affirmed. The answer is no."
+  A: "no"
 
 EXAMPLE (incorrect — DO NOT use vacuous truth):
   Q: "Is the intersection clear of parked cars?"
-  A: "yes"  ← WRONG
   Reasoning: "Since there is no intersection, it is trivially clear..."
   ← This uses vacuous truth logic, which produces inconsistent answers.
+  A: "yes"  ← WRONG
 
 **Why this matters:** Vacuous truth ("X is trivially true because Y
 doesn't exist") creates contradictions. For the same scene:
@@ -508,7 +508,7 @@ doesn't exist") creates contradictions. For the same scene:
 These are logically contradictory for a training dataset. Always
 answer "no" when the premise doesn't hold.
 
-For other answer types (categorical, open_ended, num_count, etc.),
+For other answer types (open_ended, num_count, distance, mcq),
 explicitly state that the referenced entity/location is absent and
 provide the most factually grounded response possible.
 
@@ -655,6 +655,94 @@ def parse_json_response(response: str) -> Optional[object]:
                     start_idx = None
 
     return None
+
+
+_NUM_WORDS = {
+    'zero', 'one', 'two', 'three', 'four', 'five',
+    'six', 'seven', 'eight', 'nine', 'ten',
+}
+_MCQ_LETTER_RE = re.compile(r'^[A-E](\s*,\s*[A-E])*$')
+
+
+def _block_matches_contract(blk: Dict, expected_at: str) -> Tuple[bool, str]:
+    """Check a single Q-block (positive / contrastive / vlm_proposed entry)
+    against the template's expected answer_type. Returns (ok, reason)."""
+    if not isinstance(blk, dict):
+        return False, "block is not a dict"
+
+    ans = blk.get('answer')
+    if not isinstance(ans, str):
+        return False, "answer missing or not a string"
+    ans_norm = ans.strip()
+
+    if expected_at == 'mcq':
+        if not isinstance(blk.get('mcq_options'), dict):
+            return False, "mcq template missing mcq_options dict"
+        if not _MCQ_LETTER_RE.match(ans_norm):
+            return False, f"mcq answer not in letter format: {ans_norm!r}"
+        return True, ""
+
+    # Non-MCQ: mcq_options must be absent/empty
+    if blk.get('mcq_options'):
+        return False, f"mcq_options leaked into non-mcq ({expected_at}) block"
+
+    if expected_at == 'y_or_n':
+        if ans_norm.lower() not in ('yes', 'no'):
+            return False, f"y_or_n answer not yes/no: {ans_norm!r}"
+        return True, ""
+
+    if expected_at == 'num_count':
+        if not (ans_norm.isdigit() or ans_norm.lower() in _NUM_WORDS):
+            return False, f"num_count answer not numeric: {ans_norm!r}"
+        return True, ""
+
+    if expected_at == 'distance':
+        if not re.search(r'\d', ans_norm):
+            return False, f"distance answer has no number: {ans_norm!r}"
+        return True, ""
+
+    if expected_at == 'open_ended':
+        if len(ans_norm) < 2:
+            return False, "open_ended answer too short"
+        return True, ""
+
+    # Unknown answer_type — fall back to non-empty check
+    if not ans_norm:
+        return False, "empty answer"
+    return True, ""
+
+
+def validate_result_contract(result: Dict, expected_at: str) -> Tuple[bool, List[str]]:
+    """Validate every Q-block in a parsed VLM result against the template's
+    expected answer_type. Strict: any single block failure rejects the result."""
+    failures: List[str] = []
+    pairs = result.get('pairs') or []
+    if not isinstance(pairs, list) or not pairs:
+        return False, ["no pairs in result"]
+
+    for p_idx, pair in enumerate(pairs):
+        if not isinstance(pair, dict):
+            failures.append(f"pair[{p_idx}] not a dict")
+            continue
+        for role in ('positive', 'contrastive'):
+            blk = pair.get(role)
+            if blk is None:
+                continue  # contrastive may legitimately be absent
+            if not isinstance(blk, dict):
+                failures.append(f"pair[{p_idx}].{role} not a dict")
+                continue
+            ok, reason = _block_matches_contract(blk, expected_at)
+            if not ok:
+                failures.append(f"pair[{p_idx}].{role}: {reason}")
+        for vp_idx, vp in enumerate(pair.get('vlm_proposed_contrastives') or []):
+            if not isinstance(vp, dict):
+                failures.append(f"pair[{p_idx}].vlm_proposed[{vp_idx}] not a dict")
+                continue
+            ok, reason = _block_matches_contract(vp, expected_at)
+            if not ok:
+                failures.append(f"pair[{p_idx}].vlm_proposed[{vp_idx}]: {reason}")
+
+    return (len(failures) == 0), failures
 
 
 def load_stage1_results(stage1_dir: str, sample_idx: int, categories: Optional[List[str]] = None) -> Dict:
@@ -847,6 +935,66 @@ def format_placeholders_block(placeholders: Dict, label: str = "") -> str:
     lines = []
     for tag, values in placeholders.items():
         lines.append(f"    {tag}: {json.dumps(values)}")
+    return "\n".join(lines)
+
+
+def format_answer_type_contract(answer_type: str) -> str:
+    """Per-template strict contract injected into the user prompt.
+
+    The downstream parser rejects any result that violates this contract
+    (see validate_result_contract), so the model must follow it exactly.
+    Aligned with question_bank_v4_static.json's five answer_types:
+    y_or_n, mcq, num_count, distance, open_ended.
+    """
+    lines = [
+        "--- ANSWER FORMAT CONTRACT (STRICT — violations cause result rejection) ---",
+        f"This template's answer_type is: {answer_type}",
+        "",
+        "Hard rules:",
+        f"  1. The 'answer_type' field in your JSON output MUST be exactly '{answer_type}'.",
+    ]
+    if answer_type == "mcq":
+        lines += [
+            "  2. You MUST include 'mcq_options' as a 5-key dict (A-E) with full option text.",
+            "  3. The 'answer' field MUST be option letter(s) only — single ('B') or",
+            "     comma-separated ('A,C,D'). No words, no sentences, no spaces.",
+            "  4. The number of letters in 'answer' MUST equal num_correct_positive /",
+            "     num_correct_contrastive (provided in each pair).",
+        ]
+    else:
+        # Non-MCQ rule shared by all other answer_types.
+        lines += [
+            "  2. DO NOT include 'mcq_options' anywhere in the response. The 'mcq_options'",
+            "     field is reserved for answer_type='mcq' only.",
+            "  3. DO NOT use option-letter form ('A', 'B,C', etc.) for the 'answer' field —",
+            "     option letters are reserved for answer_type='mcq' only.",
+        ]
+        if answer_type == "y_or_n":
+            lines += [
+                "  4. The 'answer' field MUST be exactly 'yes' or 'no' (lowercase, no extra text).",
+            ]
+        elif answer_type == "num_count":
+            lines += [
+                "  4. The 'answer' field MUST be a single integer like '3' (digits only,",
+                "     no units, no sentence).",
+            ]
+        elif answer_type == "distance":
+            lines += [
+                "  4. The 'answer' field MUST be a single value with unit, e.g. 'approximately",
+                "     7.4m'. The string MUST contain a digit. No multi-sentence text.",
+            ]
+        elif answer_type == "open_ended":
+            lines += [
+                "  4. The 'answer' field MUST be a 2-4 sentence descriptive answer that",
+                "     references specific objects and spatial relationships.",
+            ]
+        else:
+            # Defensive fallback (the pin step overwrites answer_type to the
+            # template's v4_static value, so this branch should be unreachable).
+            lines += [
+                f"  4. The 'answer' field MUST be in the natural form for answer_type '{answer_type}'.",
+            ]
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -1094,6 +1242,9 @@ def build_verification_prompt(
         parts.append(format_placeholders_block(original_ph))
     parts.append("")
 
+    # Per-template strict answer-format contract (parser-enforced)
+    parts.append(format_answer_type_contract(t.get('answer_type', '')))
+
     # Pre-instantiated pairs
     parts.append("--- PRE-INSTANTIATED QA PAIRS (verify and answer these) ---")
     parts.append("")
@@ -1136,16 +1287,17 @@ def build_verification_prompt(
         parts.append("   a. Bullet-point reasoning on how the altered placeholder changes the scene grounding")
         parts.append("   b. Derive the final (different) answer from that reasoning")
         parts.append("")
-        parts.append("3. **PROPOSE ADDITIONAL CONTRASTIVE QUESTIONS** (1-2 per pair):")
-        parts.append("   For each proposed contrastive, follow the same reason-first process:")
-        parts.append("   reasoning bullets → derived answer.")
-        parts.append("   Proposals must:")
-        parts.append("   - Change different placeholder(s) than the pre-generated contrastive")
-        parts.append("   - Target different objects, locations, or conditions in the scene")
-        parts.append("   - Produce a different answer from the positive with high confidence")
-        parts.append("   - Be non-trivial (require actual scene analysis)")
-        parts.append("")
-        parts.append("4. For ENTITY-type placeholders, use four-layer grounding:")
+        # NOTE: VLM-proposed additional contrastives are disabled.
+        # parts.append("3. **PROPOSE ADDITIONAL CONTRASTIVE QUESTIONS** (1-2 per pair):")
+        # parts.append("   For each proposed contrastive, follow the same reason-first process:")
+        # parts.append("   reasoning bullets → derived answer.")
+        # parts.append("   Proposals must:")
+        # parts.append("   - Change different placeholder(s) than the pre-generated contrastive")
+        # parts.append("   - Target different objects, locations, or conditions in the scene")
+        # parts.append("   - Produce a different answer from the positive with high confidence")
+        # parts.append("   - Be non-trivial (require actual scene analysis)")
+        # parts.append("")
+        parts.append("3. For ENTITY-type placeholders, use four-layer grounding:")
         parts.append("   OBJ {id} ({visual_description}, {distance_direction}, {camera_ref})")
         parts.append("")
     else:
@@ -1158,15 +1310,16 @@ def build_verification_prompt(
         parts.append("")
         parts.append("2. **ANSWER** the contrastive question (if provided) with grounded reasoning")
         parts.append("")
-        parts.append("3. **PROPOSE ADDITIONAL CONTRASTIVE QUESTIONS** (1-2 per pair):")
-        parts.append("   For each pair, suggest creative alternative contrastive questions that:")
-        parts.append("   - Change different placeholder(s) than the pre-generated contrastive")
-        parts.append("   - Target different objects, locations, or conditions in the scene")
-        parts.append("   - Produce a different answer from the positive with high confidence")
-        parts.append("   - Are non-trivial (require actual scene analysis)")
-        parts.append("   Include the answer and reasoning for each proposed contrastive.")
-        parts.append("")
-        parts.append("4. For ENTITY-type placeholders, use four-layer grounding:")
+        # NOTE: VLM-proposed additional contrastives are disabled.
+        # parts.append("3. **PROPOSE ADDITIONAL CONTRASTIVE QUESTIONS** (1-2 per pair):")
+        # parts.append("   For each pair, suggest creative alternative contrastive questions that:")
+        # parts.append("   - Change different placeholder(s) than the pre-generated contrastive")
+        # parts.append("   - Target different objects, locations, or conditions in the scene")
+        # parts.append("   - Produce a different answer from the positive with high confidence")
+        # parts.append("   - Are non-trivial (require actual scene analysis)")
+        # parts.append("   Include the answer and reasoning for each proposed contrastive.")
+        # parts.append("")
+        parts.append("3. For ENTITY-type placeholders, use four-layer grounding:")
         parts.append("   OBJ {id} ({visual_description}, {distance_direction}, {camera_ref})")
         parts.append("")
 
@@ -1218,19 +1371,7 @@ def build_verification_prompt(
                 "answer": "<final answer DERIVED from reasoning, different from positive (for mcq: count = num_correct_contrastive)>",
                 "confidence": "<high|medium|low>",
                 "relevant_cameras": [<int>]
-            },
-            "vlm_proposed_contrastives": [
-                {
-                    "altered_placeholders": ["<tags changed>"],
-                    "contrastive_strategy": "<what was changed and why>",
-                    "instantiated_question": "<your proposed contrastive question>",
-                    "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
-                    "reasoning": "- <bullet 1>\n- <bullet 2>\n- <bullet 3>",
-                    "answer": "<final answer DERIVED from reasoning>",
-                    "confidence": "<high|medium|low>",
-                    "relevant_cameras": [<int>]
-                }
-            ]
+            }
         },
         ...
     ]
@@ -1238,7 +1379,7 @@ def build_verification_prompt(
 
 NOTES:
 - """ + order_note + """
-- "prior_disagreements" is OPTIONAL on positive/contrastive/vlm_proposed_contrastives. Include it ONLY when your independent check disagrees with a Stage 1B/1C ego-applicability claim (see PRIOR APPLICABILITY VERIFICATION RULE in the system prompt). Schema per entry: {"source": "signal"|"sign", "image_idx": int, "object": str, "prior_says": str, "vlm_says": str, "evidence": str}. The answer itself must still follow the prior's claim.
+- "prior_disagreements" is OPTIONAL on positive/contrastive. Include it ONLY when your independent check disagrees with a Stage 1B/1C ego-applicability claim (see PRIOR APPLICABILITY VERIFICATION RULE in the system prompt). Schema per entry: {"source": "signal"|"sign", "image_idx": int, "object": str, "prior_says": str, "vlm_says": str, "evidence": str}. The answer itself must still follow the prior's claim.
 - "mcq_options" is REQUIRED for mcq answer_type; omit for other types.
 - For mcq, "answer" is the correct option LETTER(S): single letter ("B") or comma-separated letters ("A,C,D").
 - The number of correct options is pre-assigned per pair in `num_correct_positive` / `num_correct_contrastive` (1-5, sampled randomly). The `answer` string must contain exactly that many letters.
@@ -1287,26 +1428,14 @@ If contrastive is impossible: "contrastive": null, "contrastive_skip_reason": "<
                 "reasoning": "- <bullet 1>\n- <bullet 2>\n- <bullet 3>",
                 "confidence": "<high|medium|low>",
                 "relevant_cameras": [<int>]
-            },
-            "vlm_proposed_contrastives": [
-                {
-                    "altered_placeholders": ["<tags changed>"],
-                    "contrastive_strategy": "<what was changed and why>",
-                    "instantiated_question": "<your proposed contrastive question>",
-                    "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
-                    "answer": "<answer>",
-                    "reasoning": "- <bullet 1>\n- <bullet 2>\n- <bullet 3>",
-                    "confidence": "<high|medium|low>",
-                    "relevant_cameras": [<int>]
-                }
-            ]
+            }
         },
         ...
     ]
 }
 
 NOTES:
-- "prior_disagreements" is OPTIONAL on positive/contrastive/vlm_proposed_contrastives. Include it ONLY when your independent check disagrees with a Stage 1B/1C ego-applicability claim (see PRIOR APPLICABILITY VERIFICATION RULE in the system prompt). Schema per entry: {"source": "signal"|"sign", "image_idx": int, "object": str, "prior_says": str, "vlm_says": str, "evidence": str}. The answer itself must still follow the prior's claim.
+- "prior_disagreements" is OPTIONAL on positive/contrastive. Include it ONLY when your independent check disagrees with a Stage 1B/1C ego-applicability claim (see PRIOR APPLICABILITY VERIFICATION RULE in the system prompt). Schema per entry: {"source": "signal"|"sign", "image_idx": int, "object": str, "prior_says": str, "vlm_says": str, "evidence": str}. The answer itself must still follow the prior's claim.
 - "mcq_options" is REQUIRED for mcq answer_type; omit for other types.
 - For mcq, "answer" is the correct option LETTER(S): single letter ("B") or comma-separated letters ("A,C,D").
 - The number of correct options is pre-assigned per pair in `num_correct_positive` / `num_correct_contrastive` (1-5, sampled randomly). The `answer` string must contain exactly that many letters.
@@ -1420,6 +1549,9 @@ def build_qa_generation_prompt(
     parts.append(f"  Valid Placeholders (Stage 1 — confirmed present in this scene):")
     parts.append(format_placeholders_block(t.get('valid_placeholders', {})))
     parts.append("")
+
+    # Per-template strict answer-format contract (parser-enforced)
+    parts.append(format_answer_type_contract(t.get('answer_type', '')))
 
     # Task instructions
     parts.append("--- YOUR TASK ---")
@@ -1547,7 +1679,7 @@ def build_qa_generation_prompt(
 
 NOTES:
 - IMPORTANT: Put 'reasoning' BEFORE 'answer' in every instance. Fill in the answer AFTER writing the reasoning bullets, so the answer is derived from the reasoning (not justified after-the-fact).
-- "prior_disagreements" is OPTIONAL on positive/contrastive/vlm_proposed_contrastives. Include it ONLY when your independent check disagrees with a Stage 1B/1C ego-applicability claim (see PRIOR APPLICABILITY VERIFICATION RULE in the system prompt). Schema per entry: {"source": "signal"|"sign", "image_idx": int, "object": str, "prior_says": str, "vlm_says": str, "evidence": str}. The answer itself must still follow the prior's claim.
+- "prior_disagreements" is OPTIONAL on positive/contrastive. Include it ONLY when your independent check disagrees with a Stage 1B/1C ego-applicability claim (see PRIOR APPLICABILITY VERIFICATION RULE in the system prompt). Schema per entry: {"source": "signal"|"sign", "image_idx": int, "object": str, "prior_says": str, "vlm_says": str, "evidence": str}. The answer itself must still follow the prior's claim.
 - "mcq_options" is REQUIRED for mcq answer_type; omit for other types.
 - For mcq, "answer" is the correct option LETTER(S): single letter ("B") or comma-separated letters ("A,C,D").
 - The number of correct options is pre-assigned per pair in `num_correct_positive` / `num_correct_contrastive` (1-5, sampled randomly). The `answer` string must contain exactly that many letters.
@@ -1617,7 +1749,7 @@ If contrastive is impossible for a specific pair:
 }
 
 NOTES:
-- "prior_disagreements" is OPTIONAL on positive/contrastive/vlm_proposed_contrastives. Include it ONLY when your independent check disagrees with a Stage 1B/1C ego-applicability claim (see PRIOR APPLICABILITY VERIFICATION RULE in the system prompt). Schema per entry: {"source": "signal"|"sign", "image_idx": int, "object": str, "prior_says": str, "vlm_says": str, "evidence": str}. The answer itself must still follow the prior's claim.
+- "prior_disagreements" is OPTIONAL on positive/contrastive. Include it ONLY when your independent check disagrees with a Stage 1B/1C ego-applicability claim (see PRIOR APPLICABILITY VERIFICATION RULE in the system prompt). Schema per entry: {"source": "signal"|"sign", "image_idx": int, "object": str, "prior_says": str, "vlm_says": str, "evidence": str}. The answer itself must still follow the prior's claim.
 - "mcq_options" is REQUIRED for mcq answer_type; omit for other types.
 - For mcq, "answer" is the correct option LETTER(S): single letter ("B") or comma-separated letters ("A,C,D").
 - The number of correct options is pre-assigned per pair in `num_correct_positive` / `num_correct_contrastive` (1-5, sampled randomly). The `answer` string must contain exactly that many letters.
@@ -1820,8 +1952,8 @@ def _worker_process_sample(
                     "=== END OF RISK ASSESSMENT ANALYSIS ===\n\n"
                 ) + prompt
 
-            # Traffic signal — only for Traffic_Signs_and_Signals
-            if tmpl_category == "Traffic_Signs_and_Signals" and traffic_response:
+            # Traffic signal — applied universally across all 10 categories
+            if traffic_response:
                 prompt = (
                     "\n\n=== TRAFFIC SIGNAL ANALYSIS (from prior analysis) ===\n"
                     f"{traffic_response}\n"
@@ -1886,11 +2018,23 @@ def _worker_process_sample(
                 tqdm.write(f"      -> No valid result structure (template {tmpl_idx + 1})")
                 continue
 
-            # Ensure category is attached
-            if 'category' not in result:
-                result['category'] = tmpl['category']
-            if 'template_idx' not in result:
-                result['template_idx'] = tmpl.get('template_idx', tmpl_idx + 1)
+            # Pin metadata from the template — never trust VLM-supplied values
+            result['category'] = tmpl['category']
+            result['template_idx'] = tmpl.get('template_idx', tmpl_idx + 1)
+            result['answer_type'] = tmpl['answer_type']
+
+            # Strict contract validation — discard the whole template result if
+            # any block (positive / contrastive / vlm_proposed) violates the
+            # template's answer_type contract. This prevents categorical/list
+            # templates from being silently answered in MCQ form, etc.
+            ok, failures = validate_result_contract(result, tmpl['answer_type'])
+            if not ok:
+                tqdm.write(
+                    f"      -> REJECTED contract violation (template {tmpl_idx + 1}, "
+                    f"answer_type={tmpl['answer_type']}): {failures[0]}"
+                    + (f" (+{len(failures) - 1} more)" if len(failures) > 1 else "")
+                )
+                continue
 
             # Count pairs (including VLM-proposed contrastives)
             pairs = result.get('pairs', [])
@@ -2177,8 +2321,8 @@ def main():
                         help="Maximum distance (m) for non-vehicle objects behind ego")
 
     # Inference options
-    parser.add_argument("--resize_factor", type=int, default=2,
-                        help="Image resize factor (1/n of original size)")
+    parser.add_argument("--resize_factor", type=int, default=1,
+                        help="Image resize factor for the annotator VLM (1 = full 1600x900, default; 2 = half 800x450)")
     parser.add_argument("--max_new_tokens", type=int, default=16384,
                         help="Maximum tokens to generate per template")
     parser.add_argument("--temperature", type=float, default=0.6,
