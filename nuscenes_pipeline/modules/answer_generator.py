@@ -786,6 +786,7 @@ def load_stage1_results(stage1_dir: str, sample_idx: int, categories: Optional[L
             continue
 
         is_category_dir = entry in VALID_CATEGORIES
+        is_all_dir = entry == "all"
 
         if is_category_dir:
             # Per-category subdir: directory name is the category
@@ -794,21 +795,27 @@ def load_stage1_results(stage1_dir: str, sample_idx: int, categories: Optional[L
             for category, questions in data[sample_key].items():
                 if questions:
                     merged[category] = questions
-        else:
-            # All-category subdir (e.g., "all"): file contains multiple categories
+        elif is_all_dir:
+            # All-category subdir: file contains multiple categories
             for category, questions in data[sample_key].items():
                 if categories is not None and category not in categories:
                     continue
                 if questions and category not in merged:
                     merged[category] = questions
+        # Other subdirs (e.g., legacy "all_v3") are skipped — they may carry
+        # outputs from older question banks with answer_types that no longer
+        # match the active contract.
 
     return merged
 
 
 def discover_stage1_sample_indices(stage1_dir: str) -> List[int]:
     """
-    Scan all subdirectories of stage1_dir for applicable_questions files
-    and return a sorted list of sample indices that have Stage 1 results.
+    Scan stage1_dir for applicable_questions files and return a sorted list of
+    sample indices with Stage 1 results. Only the per-category subdirs (in
+    VALID_CATEGORIES) and the "all" subdir are considered — other subdirs
+    (e.g., legacy "all_v3") are skipped to keep this in sync with
+    load_stage1_results.
     """
     indices = set()
     if not os.path.isdir(stage1_dir):
@@ -819,6 +826,8 @@ def discover_stage1_sample_indices(stage1_dir: str) -> List[int]:
     for entry in os.listdir(stage1_dir):
         sub = os.path.join(stage1_dir, entry)
         if not os.path.isdir(sub):
+            continue
+        if entry != "all" and entry not in VALID_CATEGORIES:
             continue
         for fname in os.listdir(sub):
             m = pattern.match(fname)
