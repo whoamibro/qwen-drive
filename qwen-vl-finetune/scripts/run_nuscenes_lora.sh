@@ -51,8 +51,13 @@ LR=2e-4
 BATCH_SIZE=1
 GRAD_ACCUM=8
 NUM_EPOCHS=3
-MAX_LENGTH=8192
-RESIZE_FACTOR=2
+MAX_LENGTH=16384
+# max_pixels = 1,440,208 ~= 1600 * 900 -> ViT receives near-native nuScenes
+# resolution (rounded to a 28x28 patch grid). The image processor's
+# smart_resize handles all downsampling inside this cap; no PIL pre-resize
+# is performed in train_nuscenes_qwen3vl.py.
+MAX_PIXELS=1440208
+MIN_PIXELS=784
 
 echo "============================================"
 echo "  LoRA Fine-tuning: Qwen3-VL-8B"
@@ -64,7 +69,8 @@ echo "  Output:        $OUTPUT_DIR"
 echo "  LoRA rank:     $LORA_R"
 echo "  Learning rate: $LR"
 echo "  Batch size:    $BATCH_SIZE x $GRAD_ACCUM (accum)"
-echo "  Resize factor: $RESIZE_FACTOR"
+echo "  max_pixels:    $MAX_PIXELS"
+echo "  max_length:    $MAX_LENGTH"
 echo "  GPUs:          $NPROC_PER_NODE"
 echo "============================================"
 
@@ -79,7 +85,6 @@ torchrun \
     --model_name_or_path "$MODEL_PATH" \
     --train_data_path "$TRAIN_DATA" \
     --val_data_path "$VAL_DATA" \
-    --resize_factor $RESIZE_FACTOR \
     --lora_r $LORA_R \
     --lora_alpha $LORA_ALPHA \
     --lora_dropout $LORA_DROPOUT \
@@ -90,8 +95,8 @@ torchrun \
     --per_device_train_batch_size $BATCH_SIZE \
     --per_device_eval_batch_size 2 \
     --gradient_accumulation_steps $GRAD_ACCUM \
-    --max_pixels 50176 \
-    --min_pixels 784 \
+    --max_pixels $MAX_PIXELS \
+    --min_pixels $MIN_PIXELS \
     --eval_strategy "steps" \
     --eval_steps 1000 \
     --save_strategy "steps" \

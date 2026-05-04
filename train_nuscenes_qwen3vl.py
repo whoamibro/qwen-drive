@@ -83,16 +83,18 @@ class ModelArguments:
 @dataclass
 class DataArguments:
     train_data_path: str = field(
-        default="sft_dataset/sft_train_no_objlist.json",
+        default="sft_dataset/sft_train_qwen3vl.json",
         metadata={"help": "Path to the training data JSON file"},
     )
     val_data_path: str = field(
-        default="sft_dataset/sft_val_no_objlist.json",
+        default="sft_dataset/sft_val_qwen3vl.json",
         metadata={"help": "Path to the validation data JSON file (optional)"},
     )
-    resize_factor: int = field(default=2, metadata={"help": "Image resize factor"})
     data_flatten: bool = field(default=False)
-    max_pixels: int = field(default=28 * 28 * 576)
+    # Default max_pixels = 1600 * 900 ~= 1,440,208 (full nuScenes resolution
+    # rounded to a 28x28 patch grid). The image processor's smart_resize
+    # handles all downsampling inside this cap.
+    max_pixels: int = field(default=1_440_208)
     min_pixels: int = field(default=28 * 28 * 16)
 
 
@@ -194,8 +196,8 @@ class NuScenesVQADataset(Dataset):
     REAR_IMAGE_INDICES = {3, 4, 5}
 
     def __init__(self, data_path: str, tokenizer, image_processor,
-                 resize_factor: int = 2, max_pixels: int = 28*28*576,
-                 min_pixels: int = 28*28*16):
+                 max_pixels: int = 1_440_208,
+                 min_pixels: int = 28 * 28 * 16):
         super().__init__()
 
         rank0_print(f"Loading SFT data from: {data_path}")
@@ -205,10 +207,10 @@ class NuScenesVQADataset(Dataset):
 
         self.tokenizer = tokenizer
         self.image_processor = copy.deepcopy(image_processor)
-        self.resize_factor = resize_factor
         self.get_rope_index = get_rope_index_25
 
-        # Set pixel limits
+        # Set pixel limits — the processor's smart_resize handles all
+        # downsampling within this cap. No PIL pre-resize is needed.
         self.image_processor.max_pixels = max_pixels
         self.image_processor.min_pixels = min_pixels
         self.image_processor.size["longest_edge"] = max_pixels
@@ -218,13 +220,9 @@ class NuScenesVQADataset(Dataset):
         return len(self.data)
 
     def process_image(self, image_path: str, flip_horizontal: bool = False):
-        """Load, resize, optionally flip, and process a single image."""
+        """Load, optionally flip, and process a single image. smart_resize
+        in the image processor handles all spatial downsampling."""
         img = Image.open(image_path).convert("RGB")
-
-        # Resize
-        if self.resize_factor > 1:
-            w, h = img.size
-            img = img.resize((w // self.resize_factor, h // self.resize_factor), Image.LANCZOS)
 
         # Flip rear cameras for egocentric view
         if flip_horizontal:
@@ -455,7 +453,8 @@ def train():
     rank0_print("=" * 60)
     rank0_print(f"Training mode: {model_args.mode}")
     rank0_print(f"Model: {model_args.model_name_or_path}")
-    rank0_print(f"Resize factor: {data_args.resize_factor}")
+    rank0_print(f"max_pixels: {data_args.max_pixels} | min_pixels: {data_args.min_pixels}")
+    rank0_print(f"model_max_length: {training_args.model_max_length}")
     rank0_print("=" * 60)
 
     # Load model
@@ -508,7 +507,6 @@ def train():
         data_path=data_args.train_data_path,
         tokenizer=tokenizer,
         image_processor=image_processor,
-        resize_factor=data_args.resize_factor,
         max_pixels=data_args.max_pixels,
         min_pixels=data_args.min_pixels,
     )
@@ -519,7 +517,6 @@ def train():
             data_path=data_args.val_data_path,
             tokenizer=tokenizer,
             image_processor=image_processor,
-            resize_factor=data_args.resize_factor,
             max_pixels=data_args.max_pixels,
             min_pixels=data_args.min_pixels,
         )
