@@ -642,15 +642,40 @@ def build_system_prompt_no_objects() -> str:
     return f"{role_block}\n\n{camera_block}\n\n{reasoning_block}\n\nRespond in English."
 
 
+def format_mcq_options(mcq_options: Optional[Dict[str, str]]) -> str:
+    """Render an MCQ options dict as a labeled list suitable for the TASK block.
+
+    Returns an empty string if no options are provided. Output looks like:
+
+        Options:
+        (A) vehicles
+        (B) pedestrians
+        ...
+    """
+    if not mcq_options:
+        return ""
+    lines = ["Options:"]
+    for letter in sorted(mcq_options.keys()):
+        lines.append(f"({letter}) {mcq_options[letter]}")
+    return "\n".join(lines)
+
+
 def build_user_prompt_no_objects(
     ego: EgoState,
     question: str,
+    mcq_options: Optional[Dict[str, str]] = None,
 ) -> str:
     """
     User prompt without 3D object list — images + ego status + question only.
+    For MCQ questions, the labeled options are appended under the TASK block
+    so the model sees what each letter (A)-(E) refers to.
     """
     images_block = format_image_interleave()
     ego_block = format_ego_state(ego)
+    options_block = format_mcq_options(mcq_options)
+    task_block = f"TASK:\n{question}"
+    if options_block:
+        task_block = f"{task_block}\n\n{options_block}"
 
     return (
         f"{images_block}\n"
@@ -660,8 +685,7 @@ def build_user_prompt_no_objects(
         f"\n"
         f"{ego_block}\n"
         f"\n"
-        f"TASK:\n"
-        f"{question}"
+        f"{task_block}"
     )
 
 
@@ -669,6 +693,7 @@ def build_sft_prompts_no_objects(
     sample: NuScenesSample,
     loader: NuScenesDataLoader,
     question: str,
+    mcq_options: Optional[Dict[str, str]] = None,
 ) -> Tuple[str, str]:
     """
     Build (system_prompt, user_prompt) WITHOUT object list.
@@ -676,7 +701,7 @@ def build_sft_prompts_no_objects(
     """
     ego = extract_ego_state(sample, loader)
     system_prompt = build_system_prompt_no_objects()
-    user_prompt = build_user_prompt_no_objects(ego, question)
+    user_prompt = build_user_prompt_no_objects(ego, question, mcq_options=mcq_options)
     return system_prompt, user_prompt
 
 
@@ -687,13 +712,14 @@ def build_sft_conversations_no_objects(
     answer: str,
     reasoning: str = None,
     answer_type: str = None,
+    mcq_options: Optional[Dict[str, str]] = None,
 ) -> List[Dict]:
     """
     Build SFT conversation WITHOUT object list in the prompt.
     Used with OBJ-removed training data.
     """
     system_prompt, user_prompt = build_sft_prompts_no_objects(
-        sample, loader, question,
+        sample, loader, question, mcq_options=mcq_options,
     )
 
     if answer_type == "y_or_n":

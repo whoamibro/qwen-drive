@@ -37,8 +37,16 @@ CAM_DISPLAY = {
     'CAM_BACK': 'Rear', 'CAM_BACK_RIGHT': 'Rear-right',
 }
 
+# Rear cameras are horizontally flipped before being shown to both the
+# annotator (Stage 3) and the trained model (`train_nuscenes_qwen3vl.py`).
+# Bboxes from `get_bbox_2d_projection` are in the raw, unflipped camera
+# coordinate space, so we mirror their x-coordinates here to match the
+# displayed image. Downstream consumers (visualizer, converter, training)
+# can then treat all bboxes uniformly.
+REAR_CAMERAS = {'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT'}
 
-def build_obj_mapping(sample, scene_data, resize_factor=2):
+
+def build_obj_mapping(sample, scene_data, resize_factor=2, original_width=1600):
     """
     Build mapping: OBJ ID (1-based) -> bbox description string.
 
@@ -67,6 +75,11 @@ def build_obj_mapping(sample, scene_data, resize_factor=2):
 
         if best_cam and best_bbox:
             x1, y1, x2, y2 = best_bbox
+            # Rear cameras are mirrored at display time; flip bbox x-coords so
+            # they refer to the same pixel that the model actually sees.
+            if best_cam in REAR_CAMERAS:
+                W = original_width // resize_factor
+                x1, x2 = W - x2, W - x1
             img_num = CAM_IDX[best_cam]
             cam_label = CAM_DISPLAY[best_cam]
             desc = f"{category} (Image {img_num} ({cam_label}) bbox[{x1},{y1},{x2},{y2}])"

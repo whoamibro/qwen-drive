@@ -410,16 +410,18 @@ qwen-drive/
       qa_visualizer.py                Flask web dashboard for QA dataset verification
     postprocessing/
       __init__.py
-      transform_obj_to_bbox.py        Replace OBJ IDs with 2D bbox descriptions
-      cleanse_obj_references.py       Remove leaked OBJ refs and meta-references
+      transform_obj_to_bbox.py        Replace OBJ IDs with 2D bbox descriptions; rear cameras x-flipped
+      cleanse_obj_references.py       Remove leaked OBJ refs and meta-references (gpt turns only)
       fix_motion_states.py            Correct motion claims against GT velocity
-      prepare_sft_dataset.py          Build SFT train/val JSON (no object list)
+      prepare_sft_dataset.py          Build SFT train/val JSON (system + MCQ options + 6-image prompt)
+      convert_to_qwen3vl_format.py    Pack gpt response into reasoning/grounding/answer JSON with native grounding tokens
       count_qa_stats.py               QA pair statistics utility
     scripts/
       run_risk_assessment.sh          Shell script for Stage 1A
       run_traffic_analysis.sh         Shell script for Stage 1B
       run_question_selector.sh        Shell script for Stage 2
       run_answer_generator.sh         Shell script for Stage 3
+      run_postprocessing.sh           Wrapper for the full 5-step post-processing pipeline
       run_sft_model_tester.sh         Shell script for SFT model inference test
       show_prompts.py                 Prompt preview (prints system+user prompts without inference)
 ```
@@ -549,45 +551,59 @@ python -m nuscenes_pipeline.visualization.qa_visualizer \
 
 ## Post-Processing Pipeline
 
-After the 4 pipeline stages complete, the QA results go through post-processing to produce a clean SFT training dataset. The post-processing removes leaked 3D object list artifacts so the trained VLM relies on visual perception.
+After Stage 3 finishes, the QA results go through five post-processing steps that produce the final Qwen3-VL SFT training dataset. The single wrapper script runs the whole sequence:
+
+```bash
+bash nuscenes_pipeline/scripts/run_postprocessing.sh
+```
+
+Override defaults via env vars (`PKL_PATH`, `DATA_ROOT`, `QA_INPUT_DIR`, `SFT_DIR`). End-to-end runtime is ~2 minutes on the 5%-subset (300 samples).
 
 ### Pipeline Data Flow
 
 ```
-answer_generator output (qa_results/Observation/)
+answer_generator output (qa_results/sample_*_qa_results.json — OBJ IDs)
         |
         v
-[Step 1] transform_obj_to_bbox.py    OBJ IDs → 2D bbox descriptions
+[Step 1] transform_obj_to_bbox.py    OBJ IDs → 2D bbox descriptions in 1600x900
+                                      pixel space; rear cameras x-mirrored.
         |
         v
-sft_dataset/Observation/              (bbox-transformed QA results)
+sft_dataset/sample_*_qa_results.json  (bbox-transformed QA results)
         |
         v
-[Step 2] prepare_sft_dataset.py       Build SFT conversation format
+[Step 2] prepare_sft_dataset.py       Build 3-turn SFT conversations.
+                                      MCQ options appended under TASK.
         |
         v
 sft_dataset/sft_train_no_objlist.json + sft_val_no_objlist.json
         |
         v
-[Step 3] cleanse_obj_references.py    Remove leaked OBJ refs (Rounds 1-3)
+[Step 3] cleanse_obj_references.py    Remove leaked OBJ refs (gpt turns only).
         |
         v
-[Step 4] fix_motion_states.py         Correct motion state claims
+[Step 4] fix_motion_states.py         Correct motion state claims vs GT velocity.
         |
         v
-sft_dataset/sft_{train,val}_no_objlist.json  (FINAL — ready for SFT training)
+[Step 5] convert_to_qwen3vl_format.py System turn preserved; gpt value packed
+                                      into unified JSON (reasoning/grounding/answer);
+                                      bboxes rendered with native Qwen3-VL grounding
+                                      tokens + 0-1000 normalized coords.
+        |
+        v
+sft_dataset/sft_{train,val}_qwen3vl.json  (FINAL — ready for SFT training)
 ```
 
 ### Step 1: Transform OBJ to Bbox
 
-Replaces OBJ ID references in QA answers with visual 2D bounding box descriptions.
+Replaces OBJ ID references in QA answers with visual 2D bounding box descriptions, projecting 3D ground-truth boxes through each camera intrinsic. **Rear-camera bboxes are x-mirrored** (`x_new = W - x_old`) so coordinates match the horizontally flipped image that the model is shown both at annotation time and during training.
 
 ```bash
 python -m nuscenes_pipeline.postprocessing.transform_obj_to_bbox \
     --input_dir qa_results \
     --output_dir sft_dataset \
     --data_root ./data/nuscenes \
-    --resize_factor 2
+    --resize_factor 1
 ```
 
 | Argument | Type | Default | Description |
@@ -596,7 +612,7 @@ python -m nuscenes_pipeline.postprocessing.transform_obj_to_bbox \
 | `--output_dir` | str | `sft_dataset/Observation` | Output directory for bbox-transformed results |
 | `--pkl_path` | str | env `NUSCENES_PKL_PATH` | Path to nuScenes pickle file |
 | `--data_root` | str | env `NUSCENES_DATA_ROOT` | nuScenes data directory (where `samples/CAM_*/` images live) |
-| `--resize_factor` | int | `2` | Image resize factor (must match pipeline resize_factor) |
+| `--resize_factor` | int | `1` | Image resize factor for bbox coord space. `1` = full 1600x900 (default); `2` = 800x450 |
 
 **Transformation examples:**
 - `"OBJ 30"` → `"pedestrian (Image 2 (Front) bbox[788,234,799,314])"`
@@ -604,7 +620,7 @@ python -m nuscenes_pipeline.postprocessing.transform_obj_to_bbox \
 
 ### Step 2: Prepare SFT Dataset
 
-Converts bbox-transformed QA results into Qwen3-VL SFT training format (3-turn conversations: system, user, assistant) **without 3D object list** in the prompt.
+Converts bbox-transformed QA results into Qwen3-VL SFT training format (3-turn conversations: system, user, assistant) **without 3D object list** in the prompt. For MCQ questions, the labeled options `(A)..(E)` are appended under the `TASK:` block so the model sees what each letter refers to.
 
 ```bash
 python -m nuscenes_pipeline.postprocessing.prepare_sft_dataset \
@@ -628,7 +644,8 @@ python -m nuscenes_pipeline.postprocessing.prepare_sft_dataset \
 
 ### Step 3: Cleanse OBJ References (Rounds 1-3)
 
-Removes any remaining leaked OBJ references that survived the bbox transformation:
+Removes any remaining leaked OBJ references that survived the bbox transformation. **Only `gpt` turns are cleansed** — the human/system prompts are built from templates and never carry OBJ refs, so cleansing them would destructively collapse intentional `\n\n` paragraph breaks (e.g., the blank line between `TASK:` and the MCQ `Options:` block).
+
 - **Round 1**: Direct OBJ N patterns (e.g., `OBJ 36`, `(OBJ 36)`)
 - **Round 2**: Sentences containing meta-references (`"spatial data"`, `"OBJ ID"`, `"object list"`, `"prior knowledge"`, etc.)
 - **Round 3**: Edge-case phrase replacements (`"spatial database"` → `"scene"`, `"object list"` → `"scene"`)
@@ -673,6 +690,43 @@ python -m nuscenes_pipeline.postprocessing.fix_motion_states \
 - Motion → Stationary (velocity < 0.1 m/s): `"actively riding"` → `"stationary"`, `"in motion"` → `"stationary"`, etc.
 - Stationary → Motion (velocity ≥ 0.1 m/s): `"is parked"` → `"is moving"`, `"pulled over"` → `"in motion"`, etc.
 
+### Step 5: Convert to Qwen3-VL Unified JSON
+
+Repacks each sample into the format the SFT trainer consumes:
+- **System turn preserved** at index 0 (`from: "system"`). Our `train_nuscenes_qwen3vl.py` renders it as `<|im_start|>system\n...<|im_end|>\n` and masks with `IGNORE_INDEX` so it serves as prefix context but not loss target.
+- **gpt.value packed into a single JSON string** with three keys:
+  - `reasoning` — bullet-point string with bbox parentheticals stripped.
+  - `grounding` — list of `{image_idx, camera, ref}` objects. The `ref` field uses Qwen3-VL's **native grounding special tokens**: `<|object_ref_start|>label<|object_ref_end|><|box_start|>(x1,y1),(x2,y2)<|box_end|>`. Coordinates are normalized to **[0, 1000]** using each image's actual PIL-read dimensions, matching the convention Qwen-VL was pretrained on.
+  - `answer` — short factual response (single letter for MCQ, `Yes`/`No`, short phrase, or 2-4 sentences for `open_ended`).
+
+```bash
+python -m nuscenes_pipeline.postprocessing.convert_to_qwen3vl_format \
+    --input  sft_dataset/sft_train_no_objlist.json \
+    --output sft_dataset/sft_train_qwen3vl.json
+python -m nuscenes_pipeline.postprocessing.convert_to_qwen3vl_format \
+    --input  sft_dataset/sft_val_no_objlist.json \
+    --output sft_dataset/sft_val_qwen3vl.json
+```
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--input` | str | **required** | Pre-conversion SFT JSON (from Steps 1-4) |
+| `--output` | str | **required** | Output Qwen3-VL JSON |
+| `--dry_run` | flag | `False` | Report stats and sample preview without writing |
+| `--force` | flag | `False` | Overwrite the `.format_qwen3vl` idempotency marker |
+
+**Output schema** (one sample):
+```json
+{
+  "image": ["...CAM_FRONT_LEFT.jpg", "...CAM_FRONT.jpg", ...],
+  "conversations": [
+    {"from": "system", "value": "You are an autonomous driving..."},
+    {"from": "human",  "value": "...TASK: ...\n\nOptions:\n(A) ...\n(B) ..."},
+    {"from": "gpt",    "value": "{\n  \"reasoning\": \"- ...\",\n  \"grounding\": [{\"image_idx\": 1, \"camera\": \"Front-left\", \"ref\": \"<|object_ref_start|>pedestrian<|object_ref_end|><|box_start|>(614,473),(705,760)<|box_end|>\"}],\n  \"answer\": \"No\"\n}"}
+  ]
+}
+```
+
 ### QA Statistics Utility
 
 ```bash
@@ -709,24 +763,9 @@ bash nuscenes_pipeline/scripts/run_answer_generator.sh 0 6018 all 8 from_stage1
 # Or full range mode
 bash nuscenes_pipeline/scripts/run_answer_generator.sh 0 6018 all 8
 
-# === Post-Processing ===
-# Step 1: OBJ → bbox transformation
-python -m nuscenes_pipeline.postprocessing.transform_obj_to_bbox \
-    --input_dir qa_results --output_dir sft_dataset --data_root ./data/nuscenes
-
-# Step 2: Build SFT dataset
-python -m nuscenes_pipeline.postprocessing.prepare_sft_dataset \
-    --qa_dir sft_dataset --output_dir sft_dataset --data_root ./data/nuscenes
-
-# Step 3: Cleanse leaked OBJ references
-python -m nuscenes_pipeline.postprocessing.cleanse_obj_references \
-    --input sft_dataset/sft_train_no_objlist.json
-python -m nuscenes_pipeline.postprocessing.cleanse_obj_references \
-    --input sft_dataset/sft_val_no_objlist.json
-
-# Step 4: Fix motion state contradictions
-python -m nuscenes_pipeline.postprocessing.fix_motion_states \
-    --data_dir sft_dataset --data_root ./data/nuscenes
+# === Post-Processing (5 steps in one wrapper) ===
+bash nuscenes_pipeline/scripts/run_postprocessing.sh
+# Produces sft_dataset/sft_{train,val}_qwen3vl.json — final SFT inputs.
 ```
 
 ---
@@ -746,8 +785,8 @@ torchrun --nproc_per_node=8 train_nuscenes_qwen3vl.py \
     --deepspeed qwen-vl-finetune/scripts/zero2.json \
     --mode lora \
     --model_name_or_path ckpts/qwen3_vl_8b_instruct \
-    --train_data_path sft_dataset/sft_train_no_objlist.json \
-    --val_data_path sft_dataset/sft_val_no_objlist.json \
+    --train_data_path sft_dataset/sft_train_qwen3vl.json \
+    --val_data_path sft_dataset/sft_val_qwen3vl.json \
     --resize_factor 2 \
     --lora_r 64 --lora_alpha 128 --lora_dropout 0.05 \
     --lora_target_modules "q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj" \
@@ -755,10 +794,12 @@ torchrun --nproc_per_node=8 train_nuscenes_qwen3vl.py \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 2 \
     --learning_rate 2e-4 \
-    --output_dir output_nuscenes_lora_no_objlist \
+    --output_dir output_nuscenes_lora_qwen3vl \
     --gradient_checkpointing True \
     --report_to tensorboard
 ```
+
+`train_nuscenes_qwen3vl.py` is our custom training script (separate from the vendored `qwen-vl-finetune` / `Qwen-VL-Series-Finetune` repos). It supports `from: "system"` turns natively via `preprocess_with_system_prompt()` — system content is rendered with the standard `<|im_start|>system\n...<|im_end|>\n` chat template and masked with `IGNORE_INDEX` so it forms prefix context but not loss targets.
 
 ### Full Fine-Tuning
 
@@ -772,8 +813,8 @@ NPROC_PER_NODE=8 bash qwen-vl-finetune/scripts/run_nuscenes_full.sh
 |----------|------|---------|-------------|
 | `--mode` | str | **required** | `lora` or `full` |
 | `--model_name_or_path` | str | — | Path to Qwen3-VL model or HuggingFace ID |
-| `--train_data_path` | str | `sft_dataset/sft_train_no_objlist.json` | Training data from post-processing pipeline |
-| `--val_data_path` | str | `sft_dataset/sft_val_no_objlist.json` | Validation data |
+| `--train_data_path` | str | `sft_dataset/sft_train_qwen3vl.json` | Training data from post-processing pipeline (Step 5 output) |
+| `--val_data_path` | str | `sft_dataset/sft_val_qwen3vl.json` | Validation data (Step 5 output) |
 | `--resize_factor` | int | `2` | Image downscale factor (must match pipeline) |
 | `--lora_r` | int | `64` | LoRA rank |
 | `--lora_alpha` | int | `128` | LoRA alpha |

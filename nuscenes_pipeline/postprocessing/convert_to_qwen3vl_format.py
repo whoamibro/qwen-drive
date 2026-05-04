@@ -1,6 +1,6 @@
 """
 Convert the SFT dataset from the legacy Qwen-VL inline-bbox format to the
-unified Qwen3-VL JSON format.
+unified Qwen3-VL JSON format with native grounding tokens.
 
 Input format (legacy, inline bbox in prose)
 -------------------------------------------
@@ -10,12 +10,12 @@ Input format (legacy, inline bbox in prose)
       {"from": "gpt",    "value": "No. - pedestrian (Image 1 (Front-left) bbox[982,426,1128,684]) is present, ... - Answer: No"}
     ]
 
-Output format (unified JSON in gpt.value, with system preserved)
-----------------------------------------------------------------
+Output format (unified JSON in gpt.value, with system preserved + native grounding tokens)
+------------------------------------------------------------------------------------------
     "conversations": [
       {"from": "system", "value": "You are an autonomous driving..."},
       {"from": "human",  "value": "<image>...<image>\n...TASK: ..."},
-      {"from": "gpt",    "value": "{\n  \"reasoning\": \"- ...\",\n  \"grounding\": [{\"image_idx\": 1, \"camera\": \"Front-left\", \"bbox_2d\": [982, 426, 1128, 684], \"label\": \"pedestrian\"}],\n  \"answer\": \"No\"\n}"}
+      {"from": "gpt",    "value": "{\n  \"reasoning\": \"- ...\",\n  \"grounding\": [{\"image_idx\": 1, \"camera\": \"Front-left\", \"ref\": \"<|object_ref_start|>pedestrian<|object_ref_end|><|box_start|>(614,473),(705,760)<|box_end|>\"}],\n  \"answer\": \"No\"\n}"}
     ]
 
 System turn handling: PRESERVED as its own turn (not merged into human).
@@ -24,12 +24,27 @@ natively via `preprocess_with_system_prompt()`, which renders it as
 `<|im_start|>system\n...<|im_end|>\n` and masks the system tokens with
 IGNORE_INDEX so they form prefix context but not loss targets.
 
+Bbox coordinate convention
+--------------------------
+Source bboxes are in pixel space of the source image (after
+`transform_obj_to_bbox.py`). The converter reads each referenced image's
+dimensions dynamically via PIL (`Image.open(path).size`) and normalizes
+coordinates to the [0, 1000] range that Qwen-VL grounding tokens were
+pretrained on:
+    x_norm = round(x_pixel / image_width  * 1000)
+    y_norm = round(y_pixel / image_height * 1000)
+Coordinates are clamped to [0, 1000] in case of out-of-frame boxes.
+
 The gpt.value is a JSON string that parses to:
     {
       "reasoning": "<bullet-point reasoning, bboxes removed>",
-      "grounding": [{"image_idx": N, "camera": "...", "bbox_2d": [x1,y1,x2,y2], "label": "..."}],
+      "grounding": [{"image_idx": N, "camera": "...",
+                     "ref": "<|object_ref_start|>label<|object_ref_end|><|box_start|>(x1,y1),(x2,y2)<|box_end|>"}],
       "answer": "<short answer>"
     }
+The `ref` field uses Qwen3-VL's native grounding special tokens
+(`<|object_ref_start|>`, `<|object_ref_end|>`, `<|box_start|>`, `<|box_end|>`)
+so SFT leverages the model's pretraining prior for grounding.
 
 Usage
 -----
@@ -49,6 +64,47 @@ import os
 import re
 import json
 import argparse
+
+from PIL import Image
+
+
+# ---------------------------------------------------------------------------
+# Image-size lookup (cached)
+# ---------------------------------------------------------------------------
+
+_IMG_SIZE_CACHE: dict[str, tuple[int, int]] = {}
+
+
+def _get_image_size(path: str) -> tuple[int, int]:
+    """Return (width, height) of the image at `path`, cached.
+
+    Reads dimensions dynamically rather than assuming a fixed resolution, so the
+    converter stays correct if upstream stages produce bboxes in a different
+    image space (resize_factor change, dataset swap, etc.).
+    """
+    if path in _IMG_SIZE_CACHE:
+        return _IMG_SIZE_CACHE[path]
+    with Image.open(path) as im:
+        size = im.size  # (W, H)
+    _IMG_SIZE_CACHE[path] = size
+    return size
+
+
+def _normalize_xyxy(x1: int, y1: int, x2: int, y2: int,
+                    img_w: int, img_h: int) -> tuple[int, int, int, int]:
+    """Map pixel-space xyxy to the [0, 1000] grid used by Qwen-VL grounding tokens."""
+    def _n(v: int, dim: int) -> int:
+        nv = round(v / dim * 1000)
+        return max(0, min(1000, nv))
+    return _n(x1, img_w), _n(y1, img_h), _n(x2, img_w), _n(y2, img_h)
+
+
+def _format_ref(label: str, x1n: int, y1n: int, x2n: int, y2n: int) -> str:
+    """Render the native Qwen3-VL grounding string for one labeled bbox."""
+    return (
+        f"<|object_ref_start|>{label}<|object_ref_end|>"
+        f"<|box_start|>({x1n},{y1n}),({x2n},{y2n})<|box_end|>"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -85,9 +141,13 @@ _FIRST_BULLET_RE = re.compile(r'\s*\n?\s*-\s+', re.MULTILINE)
 # Bbox extraction + text cleanup
 # ---------------------------------------------------------------------------
 
-def extract_grounding(text: str) -> tuple[list[dict], str]:
+def extract_grounding(text: str, image_paths: list[str]) -> tuple[list[dict], str]:
     """Extract bbox-referenced objects from text into a grounding list and return
     the text with bbox parentheticals stripped.
+
+    Bboxes are normalized to the [0, 1000] grid using the actual pixel
+    dimensions of the referenced source image (looked up via PIL), so the
+    `ref` field uses Qwen-VL's native grounding token convention.
 
     Returns: (grounding_list, cleaned_text)
     """
@@ -104,11 +164,14 @@ def extract_grounding(text: str) -> tuple[list[dict], str]:
         if key in seen:
             continue
         seen.add(key)
+
+        img_w, img_h = _get_image_size(image_paths[img_idx - 1])
+        x1n, y1n, x2n, y2n = _normalize_xyxy(x1, y1, x2, y2, img_w, img_h)
+
         grounding.append({
             "image_idx": img_idx,
             "camera": camera,
-            "bbox_2d": [x1, y1, x2, y2],
-            "label": label,
+            "ref": _format_ref(label, x1n, y1n, x2n, y2n),
         })
 
     # Replace "label (Image N (CamName) bbox[...])" with just "label"
@@ -162,14 +225,14 @@ def extract_answer_and_reasoning(text: str) -> tuple[str, str, str]:
 # Per-sample conversion
 # ---------------------------------------------------------------------------
 
-def convert_gpt_value(value: str) -> tuple[str, dict]:
+def convert_gpt_value(value: str, image_paths: list[str]) -> tuple[str, dict]:
     """Convert one gpt turn's value string.
 
     Returns: (new_value_json_string, per_sample_stats)
     """
     stats = {"grounding_count": 0, "heuristic_used": None}
 
-    grounding, cleaned = extract_grounding(value)
+    grounding, cleaned = extract_grounding(value, image_paths)
     stats["grounding_count"] = len(grounding)
 
     answer, reasoning, heuristic = extract_answer_and_reasoning(cleaned)
@@ -196,6 +259,7 @@ def convert_sample(sample: dict) -> tuple[dict, dict]:
     Returns (new_sample, stats).
     """
     convs = sample.get("conversations", [])
+    image_paths = sample.get("image", [])
     new_convs = []
     per_sample_stats = {
         "system_preserved": False,
@@ -219,7 +283,7 @@ def convert_sample(sample: dict) -> tuple[dict, dict]:
             continue
 
         if role == "gpt":
-            new_value, turn_stats = convert_gpt_value(value)
+            new_value, turn_stats = convert_gpt_value(value, image_paths)
             new_convs.append({"from": "gpt", "value": new_value})
             per_sample_stats["gpt_turns"] += 1
             per_sample_stats["grounding_count"] += turn_stats["grounding_count"]

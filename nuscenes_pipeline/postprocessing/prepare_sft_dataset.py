@@ -93,6 +93,7 @@ def process_qa_file(
                         answer=pos['answer'],
                         reasoning=pos.get('reasoning'),
                         answer_type=answer_type,
+                        mcq_options=pos.get('mcq_options'),
                     )
                     sft_samples.append({
                         "image": image_paths,
@@ -114,6 +115,7 @@ def process_qa_file(
                             answer=cont['answer'],
                             reasoning=cont.get('reasoning'),
                             answer_type=answer_type,
+                            mcq_options=cont.get('mcq_options'),
                         )
                         sft_samples.append({
                             "image": image_paths,
@@ -134,6 +136,7 @@ def process_qa_file(
                                 answer=vlm_cont['answer'],
                                 reasoning=vlm_cont.get('reasoning'),
                                 answer_type=answer_type,
+                                mcq_options=vlm_cont.get('mcq_options'),
                             )
                             sft_samples.append({
                                 "image": image_paths,

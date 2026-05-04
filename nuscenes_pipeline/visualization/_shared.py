@@ -357,8 +357,9 @@ def build_panoramic(sample, loader, bbox_overlays=None, resize_factor=2,
             w, h = img.size
             img = img.resize((w // resize_factor, h // resize_factor), Image.LANCZOS)
 
-        # Flip rear cameras FIRST for egocentric consistency, so we draw bboxes
-        # with readable (non-mirrored) text in the final orientation.
+        # Flip rear images for display only. Bboxes are produced in
+        # already-flipped coords by transform_obj_to_bbox.py, so we draw them
+        # directly on the flipped image without an extra mirror.
         is_rear = view_idx in REAR_INDICES
         if is_rear:
             img = img.transpose(Image.FLIP_LEFT_RIGHT)
@@ -377,15 +378,8 @@ def build_panoramic(sample, loader, bbox_overlays=None, resize_factor=2,
                      int(x2 * bbox_scale), int(y2 * bbox_scale), label)
                     for x1, y1, x2, y2, label in bs]
 
-        def _flip(bs):
-            return [(display_w - x2, y1, display_w - x1, y2, label)
-                    for x1, y1, x2, y2, label in bs]
-
-        # Draw bbox overlays. Scale first (to display space), then flip x for rear.
         for bboxes, color in bbox_overlays.get(img_num, []):
-            scaled = _scale(bboxes)
-            to_draw = _flip(scaled) if is_rear else scaled
-            draw_bboxes_on_image(img, to_draw, color)
+            draw_bboxes_on_image(img, _scale(bboxes), color)
 
         panoramic_b64.append(image_to_base64(img))
 

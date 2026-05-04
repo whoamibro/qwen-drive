@@ -32,14 +32,14 @@ DEEPSPEED_CONFIG="$PROJECT_ROOT/qwen-vl-finetune/scripts/zero2.json"
 MODEL_PATH="ckpts/qwen3_vl_8b_instruct"
 
 # Data paths
-TRAIN_DATA="$PROJECT_ROOT/sft_dataset/sft_train_no_objlist.json"
+TRAIN_DATA="$PROJECT_ROOT/sft_dataset/sft_train_qwen3vl.json"
 # Small held-out subset (300 samples) for in-training eval.
 # Full val set (sft_val_no_objlist.json, 35K samples) is reserved for final evaluation.
-VAL_DATA="$PROJECT_ROOT/sft_dataset/sft_val_small.json"
+VAL_DATA="$PROJECT_ROOT/sft_dataset/sft_val_qwen3vl.json"
 
 # Output
-OUTPUT_DIR="$PROJECT_ROOT/output_nuscenes_lora_no_objlist"
-RUN_NAME="nuscenes-qwen3vl-8b-lora-no-objlist"
+OUTPUT_DIR="$PROJECT_ROOT/output_nuscenes_lora_5p_test_qwen3vl"
+RUN_NAME="nuscenes-qwen3vl-8b-lora-5p-test-qwen3vl"
 
 # LoRA hyperparameters
 LORA_R=64
@@ -93,9 +93,9 @@ torchrun \
     --max_pixels 50176 \
     --min_pixels 784 \
     --eval_strategy "steps" \
-    --eval_steps 500 \
+    --eval_steps 1000 \
     --save_strategy "steps" \
-    --save_steps 500 \
+    --save_steps 1000 \
     --save_total_limit 3 \
     --learning_rate $LR \
     --weight_decay 0.01 \

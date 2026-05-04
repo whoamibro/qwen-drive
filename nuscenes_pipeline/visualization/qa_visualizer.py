@@ -328,8 +328,9 @@ def api_sample():
             img = Image.open(img_path).convert('RGB')
             w, h = img.size
             img = img.resize((w // 2, h // 2), Image.LANCZOS)
-            # Flip rear cameras FIRST so bbox text stays readable after flip,
-            # then flip bbox x-coords so rectangles align with the flipped view.
+            # Flip rear images for display only. Bboxes are now produced in
+            # already-flipped coords by transform_obj_to_bbox.py, so we draw
+            # them directly on the flipped image without an extra mirror.
             is_rear = i in REAR_INDICES
             if is_rear:
                 img = img.transpose(Image.FLIP_LEFT_RIGHT)
@@ -344,20 +345,10 @@ def api_sample():
                 return [(int(x1 * scale), int(y1 * scale), int(x2 * scale), int(y2 * scale), label)
                         for x1, y1, x2, y2, label in bs]
 
-            def _flip_bboxes(bs):
-                return [(display_w - x2, y1, display_w - x1, y2, label)
-                        for x1, y1, x2, y2, label in bs]
-
             if i in q_by_img:
-                bs = _scale_bboxes(q_by_img[i])
-                if is_rear:
-                    bs = _flip_bboxes(bs)
-                img = draw_bboxes_on_image(img, bs, color=(46, 204, 113))
+                img = draw_bboxes_on_image(img, _scale_bboxes(q_by_img[i]), color=(46, 204, 113))
             if i in a_by_img:
-                bs = _scale_bboxes(a_by_img[i])
-                if is_rear:
-                    bs = _flip_bboxes(bs)
-                img = draw_bboxes_on_image(img, bs, color=(233, 30, 140))
+                img = draw_bboxes_on_image(img, _scale_bboxes(a_by_img[i]), color=(233, 30, 140))
             images_b64.append(image_to_base64(img))
         except Exception as e:
             ph = Image.new('RGB', (400, 225), (40, 40, 40))

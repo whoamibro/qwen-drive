@@ -74,7 +74,7 @@ python3 -m nuscenes_pipeline.modules.answer_generator \
     --max_pairs 3 \
     --filter_distance 50 \
     --rear_filter 20 \
-    --resize_factor 2 \
+    --resize_factor 1 \
     --stage1_dir "$STAGE1_DIR" \
     --output_dir "$OUTPUT_DIR" \
     --log_dir "$LOG_DIR" \

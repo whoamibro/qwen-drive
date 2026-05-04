@@ -173,7 +173,11 @@ def cleanse_conversation(conv: dict) -> dict:
         return stats
 
     for turn in conv['conversations']:
-        if turn.get('from') in ('human', 'gpt'):
+        # Only cleanse gpt turns. Human/system turns are built from prompt
+        # templates and never contain OBJ refs; running the round-1 whitespace
+        # collapse on them would destroy intentional \n\n paragraph breaks
+        # (e.g., the blank line between TASK and the MCQ Options block).
+        if turn.get('from') == 'gpt':
             text = turn.get('value', '')
             cleaned, s = cleanse_text(text)
             if cleaned != text:
