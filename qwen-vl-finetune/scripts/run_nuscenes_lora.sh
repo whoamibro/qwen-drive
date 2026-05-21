@@ -38,7 +38,7 @@ TRAIN_DATA="$PROJECT_ROOT/sft_dataset/sft_train_qwen3vl.json"
 VAL_DATA="$PROJECT_ROOT/sft_dataset/sft_val_qwen3vl.json"
 
 # Output
-OUTPUT_DIR="$PROJECT_ROOT/output_nuscenes_lora_5p_test_qwen3vl"
+OUTPUT_DIR="$PROJECT_ROOT/output_nuscenes_lora_5p_test_qwen3vl_v9"
 RUN_NAME="nuscenes-qwen3vl-8b-lora-5p-test-qwen3vl"
 
 # LoRA hyperparameters
@@ -49,7 +49,7 @@ LORA_DROPOUT=0.05
 # Training hyperparameters
 LR=2e-4
 BATCH_SIZE=1
-GRAD_ACCUM=8
+GRAD_ACCUM=4
 NUM_EPOCHS=3
 MAX_LENGTH=16384
 # max_pixels = 1,440,208 ~= 1600 * 900 -> ViT receives near-native nuScenes
