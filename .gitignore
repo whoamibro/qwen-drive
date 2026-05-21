@@ -14,6 +14,9 @@ qa_outputs
 sft_dataset
 sft_dataset_v*
 output_nuscenes_*
+output/
+datas_v9/
+.vllm_setup/
 question_selector_logs
 answer_generator_logs
 prior_disagreements
