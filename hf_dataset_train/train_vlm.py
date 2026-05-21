@@ -1,3 +1,28 @@
+# Workaround: transformer_engine_cu12-2.4.0+3cd6870c has an empty/malformed RECORD file
+# in its .dist-info, which crashes importlib.metadata.packages_distributions() with
+# "make_file() missing 1 required positional argument: 'name'". trl/import_utils.py
+# calls packages_distributions() at import time. Patch Distribution.files in both the
+# stdlib module and the importlib_metadata backport so iteration skips the bad dist.
+import importlib.metadata as _stdlib_im
+_modules_to_patch = [_stdlib_im]
+try:
+    import importlib_metadata as _backport_im
+    _modules_to_patch.append(_backport_im)
+except ImportError:
+    pass
+
+def _make_safe_files(orig):
+    is_prop = isinstance(orig, property)
+    def _safe_files(self):
+        try:
+            return orig.fget(self) if is_prop else orig(self)
+        except TypeError:
+            return None
+    return property(_safe_files) if is_prop else _safe_files
+
+for _mod in _modules_to_patch:
+    _mod.Distribution.files = _make_safe_files(_mod.Distribution.files)
+
 import os
 import json
 import torch
