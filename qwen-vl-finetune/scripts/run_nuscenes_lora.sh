@@ -100,7 +100,7 @@ torchrun \
     --eval_strategy "steps" \
     --eval_steps 1000 \
     --save_strategy "steps" \
-    --save_steps 1000 \
+    --save_steps 100 \
     --save_total_limit 3 \
     --learning_rate $LR \
     --weight_decay 0.01 \

@@ -346,40 +346,37 @@ Across all pairs generated for a single template, ensure:
     e) For ENTITY placeholders: select a different OBJ that changes the answer
     f) For no-placeholder templates: if the answer is fixed, contrastive is null.
 
-**mcq** (68 templates — multiple choice with 5 options A-E, variable number correct):
-  Each MCQ question MUST have exactly 5 options labeled (A) through (E).
-  The number of CORRECT options is variable (1 to 5) and is PRE-ASSIGNED per pair
-  in the field `num_correct_positive` / `num_correct_contrastive`.
-  You MUST construct the MCQ so that exactly that many options are correct.
+**mcq** (68 templates — multiple choice with 5 options A-E, EXACTLY ONE correct):
+  Each MCQ question MUST have exactly 5 options labeled (A) through (E),
+  with EXACTLY ONE option that is factually correct of the scene. The other
+  four are plausible distractors.
 
   Option construction rules:
-    1. **Correct options (count = `num_correct_*`)**: All factually correct answers
-       grounded in the scene. The count is predetermined — you do NOT choose it.
-       - If `num_correct` = 1: a single-answer MCQ (pick one)
-       - If `num_correct` = 2-4: a multi-select MCQ (multiple true statements)
-       - If `num_correct` = 5: all 5 options are correct (edge case — use when
-         every option is verifiably true of the scene)
-    2. **Distractors (count = 5 − `num_correct`)**: Plausible but incorrect alternatives.
+    1. **Correct option (exactly 1)**: The single option that is unambiguously
+       supported by the scene. If the scene supports more than one option as
+       true, refine the question (or pick the single most-specific true option)
+       so that only one option is correct. Never assert a false option as
+       correct just to fit a target count.
+    2. **Distractors (exactly 4)**: Plausible but incorrect alternatives.
        - Draw from `expected_answers` when available (these are the candidate pool).
-       - If `expected_answers` has fewer than needed values, generate plausible
+       - If `expected_answers` has fewer than 4 values, generate plausible
          distractors that are semantically consistent with the question type
          (e.g., for a color question: other colors; for a vehicle type: other types).
        - Avoid absurd or semantically incoherent options.
-    3. **Distractor quality** (when distractors exist):
+    3. **Distractor quality**:
        - At least one distractor should be a "close miss" (plausible for the scene).
        - At least one distractor should be clearly wrong (to set a difficulty range).
-    4. **Randomize correct-option positions**: Spread correct letters across A-E
-       positions; do NOT always place correct options at the start.
+    4. **Randomize correct-option position**: Spread the correct letter across
+       A-E positions across pairs; do NOT always place it at (A).
 
   Answer field format:
-    - Single correct: `"answer": "B"`
-    - Multiple correct: `"answer": "A,C,D"` (comma-separated option letters, no spaces)
-    - The number of letters in `answer` must equal `num_correct_*`.
+    - Always a single letter: `"answer": "B"`
+    - Never a list / never comma-separated.
 
-  POSITIVE → correct answer set (size `num_correct_positive`)
-  CONTRASTIVE → different correct answer set (size `num_correct_contrastive`)
-  The contrastive's answer set must DIFFER from the positive's answer set
-  (different letters or different count).
+  POSITIVE → the single correct letter for the positive question.
+  CONTRASTIVE → the single correct letter for the contrastive question.
+  The contrastive question differs from the positive (one placeholder swapped),
+  so its correct letter generally differs too.
 
   Strategies:
     a) For object/state templates: swap placeholder to a different object/state
@@ -522,19 +519,19 @@ Short-answer = the minimal factual response with no extra elaboration.
 All detail and justification goes in the "reasoning" field, not in "answer".
 
 1. **y_or_n**: Strictly "yes" or "no". Nothing else.
-2. **mcq**: The correct option LETTER(S), comma-separated if multiple.
-   - Single correct: `"B"`. Multiple correct: `"A,C,D"` (no spaces).
-   - Construct exactly 5 options labeled (A) through (E).
-   - The number of CORRECT options is pre-assigned per pair in `num_correct_positive` /
-     `num_correct_contrastive` (an integer from 1 to 5 drawn randomly during
-     pre-instantiation). You MUST match that count exactly.
-   - Distractors: `5 - num_correct` plausible incorrect options.
-     Draw from `expected_answers` when available; generate semantically consistent
-     alternatives when the pool is too small.
+2. **mcq**: The correct option LETTER (always exactly one).
+   - Answer is a single letter, e.g. `"B"`. Never a list / never comma-separated.
+   - Construct exactly 5 options labeled (A) through (E), with EXACTLY ONE that is
+     factually correct of the scene. The other 4 are plausible distractors.
+   - If more than one option appears arguably true, refine the question (or pick
+     the single most-specific true option) so that only ONE is correct. Never
+     assert a false option as correct to hit a target count.
+   - Distractors: draw from `expected_answers` when available; generate
+     semantically consistent alternatives when the pool is too small.
    - Include the full options list in `mcq_options`:
      {"A": "option text", "B": "option text", "C": "option text",
       "D": "option text", "E": "option text"}
-   - Randomize which positions (A-E) hold the correct options across pairs.
+   - Randomize which position (A-E) holds the correct option across pairs.
 3. **distance**: A single value with unit (e.g., "approximately 7.4m"). No sentence.
 4. **num_count**: A single integer (e.g., "3"). No sentence.
 5. **open_ended** (EXCEPTION — longer answers allowed):
@@ -563,13 +560,9 @@ Required bullet content:
 Example (y_or_n):
   "reasoning": "- OBJ 18 (car) is 7.4m directly ahead, visible in Image 2 (Front)\n- OBJ 23 (car) is 12.5m ahead in the same lane, visible in Image 2\n- Both vehicles are in the ego-vehicle's current lane, confirming presence\n- Answer: yes"
 
-Example (mcq, single correct, num_correct=1):
+Example (mcq, single-correct contract):
   "reasoning": "- Image 2 (Front) shows a traffic light ahead of the ego-vehicle\n- The light displays a solid red circle, verified in Image 2\n- No green or yellow signal is visible for the ego-vehicle's lane\n- Correct option: (C) red"
   "answer": "C"
-
-Example (mcq, multi-correct, num_correct=3):
-  "reasoning": "- Image 2 shows a pedestrian 22m ahead on the crosswalk\n- Image 3 shows a cyclist in the adjacent right lane\n- Image 5 shows a vehicle braking 6m behind the ego\n- These three agents all affect the ego's immediate driving situation\n- Correct options: (A), (C), (D)"
-  "answer": "A,C,D"
 
 For CONTRASTIVE reasoning, additionally include:
   - A bullet stating which placeholder(s) were changed and the value source
@@ -661,7 +654,10 @@ _NUM_WORDS = {
     'zero', 'one', 'two', 'three', 'four', 'five',
     'six', 'seven', 'eight', 'nine', 'ten',
 }
-_MCQ_LETTER_RE = re.compile(r'^[A-E](\s*,\s*[A-E])*$')
+# MCQ is single-correct: answer must be EXACTLY ONE letter A-E. Multi-letter
+# (comma-separated) responses are rejected at the parser layer so the pipeline
+# can never silently emit multi-correct MCQs again.
+_MCQ_LETTER_RE = re.compile(r'^[A-E]$')
 
 
 def _block_matches_contract(blk: Dict, expected_at: str) -> Tuple[bool, str]:
@@ -965,10 +961,12 @@ def format_answer_type_contract(answer_type: str) -> str:
     if answer_type == "mcq":
         lines += [
             "  2. You MUST include 'mcq_options' as a 5-key dict (A-E) with full option text.",
-            "  3. The 'answer' field MUST be option letter(s) only — single ('B') or",
-            "     comma-separated ('A,C,D'). No words, no sentences, no spaces.",
-            "  4. The number of letters in 'answer' MUST equal num_correct_positive /",
-            "     num_correct_contrastive (provided in each pair).",
+            "  3. The 'answer' field MUST be EXACTLY ONE option letter (e.g. 'B').",
+            "     Never a list, never comma-separated, never multiple letters.",
+            "  4. Construct the 5 options so that EXACTLY ONE is correct of the scene",
+            "     and the other 4 are plausible distractors. If more than one option",
+            "     appears arguably true, refine the question (or pick the single most",
+            "     specific true option) so that only one is correct.",
         ]
     else:
         # Non-MCQ rule shared by all other answer_types.
@@ -1064,11 +1062,15 @@ def pre_instantiate_pairs(
     is_mcq = answer_type == 'mcq'
 
     def _sample_mcq_correct_counts():
-        """Sample (num_correct_positive, num_correct_contrastive) each in [1, 5].
-        Ensures the two counts differ OR both are feasible to produce different answer sets."""
-        n_pos = rng.randint(1, 5)
-        n_ctr = rng.randint(1, 5)
-        return n_pos, n_ctr
+        """Single-correct MCQ contract: exactly ONE correct option per question.
+
+        Earlier versions randomly sampled num_correct in [1, 5] before the VLM
+        had seen the scene, which forced the model to assert N options correct
+        regardless of how many were actually true of the scene. Hard-coding to
+        1 removes the impossible-count failure mode entirely; the contrastive
+        pair already differs from the positive because its question has an
+        altered placeholder."""
+        return 1, 1
 
     # Normalize tag keys
     valid_ph = {_normalize_tag(k): v for k, v in valid_ph.items()}
@@ -1261,14 +1263,12 @@ def build_verification_prompt(
         parts.append(f"  Pair {i}:")
         parts.append(f"    Positive Question: \"{pair['positive_question']}\"")
         if 'num_correct_positive' in pair:
-            parts.append(f"    [MCQ] num_correct_positive: {pair['num_correct_positive']} "
-                         f"(build 5 options A-E with exactly this many correct)")
+            parts.append(f"    [MCQ] Build 5 options A-E with EXACTLY ONE correct of the scene; answer is a single letter.")
         if pair['contrastive_question']:
             parts.append(f"    Contrastive Question: \"{pair['contrastive_question']}\"")
             parts.append(f"    Contrastive Strategy: {pair['contrastive_strategy']}")
             if 'num_correct_contrastive' in pair:
-                parts.append(f"    [MCQ] num_correct_contrastive: {pair['num_correct_contrastive']} "
-                             f"(must differ from positive's answer set)")
+                parts.append(f"    [MCQ] Same single-correct rule; the correct letter generally differs from the positive's.")
         else:
             parts.append(f"    Contrastive Question: (none pre-generated — you must propose one)")
         parts.append("")
@@ -1366,7 +1366,7 @@ def build_verification_prompt(
                 "instantiated_question": "<the pre-instantiated positive question>",
                 "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
                 "reasoning": "- <bullet 1: OBJ ID + spatial data>\n- <bullet 2: camera ref>\n- <bullet 3: conclusion toward the answer>",
-                "answer": "<final answer DERIVED from the reasoning above (for mcq: letter(s), e.g. 'B' or 'A,C,D' — count must match num_correct_positive)>",
+                "answer": "<final answer DERIVED from the reasoning above (for mcq: a single option letter, e.g. 'B' — exactly one correct option)>",
                 "confidence": "<high|medium|low>",
                 "relevant_cameras": [<int>]
             },
@@ -1377,7 +1377,7 @@ def build_verification_prompt(
                 "instantiated_question": "<the pre-instantiated contrastive question>",
                 "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
                 "reasoning": "- <bullet 1>\n- <bullet 2: why this altered placeholder changes the grounding>\n- <bullet 3: conclusion>",
-                "answer": "<final answer DERIVED from reasoning, different from positive (for mcq: count = num_correct_contrastive)>",
+                "answer": "<final answer DERIVED from reasoning, different from positive (for mcq: a single option letter, generally different from positive)>",
                 "confidence": "<high|medium|low>",
                 "relevant_cameras": [<int>]
             }
@@ -1390,9 +1390,8 @@ NOTES:
 - """ + order_note + """
 - "prior_disagreements" is OPTIONAL on positive/contrastive. Include it ONLY when your independent check disagrees with a Stage 1B/1C ego-applicability claim (see PRIOR APPLICABILITY VERIFICATION RULE in the system prompt). Schema per entry: {"source": "signal"|"sign", "image_idx": int, "object": str, "prior_says": str, "vlm_says": str, "evidence": str}. The answer itself must still follow the prior's claim.
 - "mcq_options" is REQUIRED for mcq answer_type; omit for other types.
-- For mcq, "answer" is the correct option LETTER(S): single letter ("B") or comma-separated letters ("A,C,D").
-- The number of correct options is pre-assigned per pair in `num_correct_positive` / `num_correct_contrastive` (1-5, sampled randomly). The `answer` string must contain exactly that many letters.
-- Construct exactly 5 options (A-E): `num_correct` correct + `(5 - num_correct)` plausible distractors.
+- For mcq, "answer" is EXACTLY ONE option letter (e.g. "B"). Never comma-separated, never multiple letters.
+- MCQ is single-correct: construct exactly 5 options (A-E) with EXACTLY ONE that is factually correct of the scene plus 4 plausible distractors. The `answer` field is a single option letter (e.g. 'B'). Never assert more than one option as correct.
 - Randomize which positions (A-E) hold the correct options across pairs.
 If contrastive is impossible: "contrastive": null, "contrastive_skip_reason": "<explanation>"
 """
@@ -1422,7 +1421,7 @@ If contrastive is impossible: "contrastive": null, "contrastive_skip_reason": "<
                 },
                 "instantiated_question": "<the pre-instantiated positive question>",
                 "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
-                "answer": "<answer (for mcq: option letter(s), e.g. 'B' or 'A,C,D' — count must match num_correct_positive)>",
+                "answer": "<answer (for mcq: a single option letter, e.g. 'B' — exactly one correct option)>",
                 "reasoning": "- <bullet 1: OBJ ID + spatial data>\n- <bullet 2: camera ref>\n- <bullet 3: conclusion>",
                 "confidence": "<high|medium|low>",
                 "relevant_cameras": [<int>]
@@ -1433,7 +1432,7 @@ If contrastive is impossible: "contrastive": null, "contrastive_skip_reason": "<
                 "tag_mappings": { ... },
                 "instantiated_question": "<the pre-instantiated contrastive question>",
                 "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
-                "answer": "<different answer (for mcq: different letter set than positive, count = num_correct_contrastive)>",
+                "answer": "<different answer (for mcq: a single option letter, different from positive when possible)>",
                 "reasoning": "- <bullet 1>\n- <bullet 2>\n- <bullet 3>",
                 "confidence": "<high|medium|low>",
                 "relevant_cameras": [<int>]
@@ -1446,9 +1445,8 @@ If contrastive is impossible: "contrastive": null, "contrastive_skip_reason": "<
 NOTES:
 - "prior_disagreements" is OPTIONAL on positive/contrastive. Include it ONLY when your independent check disagrees with a Stage 1B/1C ego-applicability claim (see PRIOR APPLICABILITY VERIFICATION RULE in the system prompt). Schema per entry: {"source": "signal"|"sign", "image_idx": int, "object": str, "prior_says": str, "vlm_says": str, "evidence": str}. The answer itself must still follow the prior's claim.
 - "mcq_options" is REQUIRED for mcq answer_type; omit for other types.
-- For mcq, "answer" is the correct option LETTER(S): single letter ("B") or comma-separated letters ("A,C,D").
-- The number of correct options is pre-assigned per pair in `num_correct_positive` / `num_correct_contrastive` (1-5, sampled randomly). The `answer` string must contain exactly that many letters.
-- Construct exactly 5 options (A-E): `num_correct` correct + `(5 - num_correct)` plausible distractors.
+- For mcq, "answer" is EXACTLY ONE option letter (e.g. "B"). Never comma-separated, never multiple letters.
+- MCQ is single-correct: construct exactly 5 options (A-E) with EXACTLY ONE that is factually correct of the scene plus 4 plausible distractors. The `answer` field is a single option letter (e.g. 'B'). Never assert more than one option as correct.
 - Randomize which positions (A-E) hold the correct options across pairs.
 If contrastive is impossible: "contrastive": null, "contrastive_skip_reason": "<explanation>"
 """
@@ -1653,7 +1651,7 @@ def build_qa_generation_prompt(
                 "instantiated_question": "<final question>",
                 "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
                 "reasoning": "- <bullet 1: OBJ ID + spatial data>\n- <bullet 2: camera ref>\n- <bullet 3: conclusion toward the answer>",
-                "answer": "<final answer DERIVED from the reasoning above (for mcq: letter(s), e.g. 'B' or 'A,C,D' — count must match num_correct_positive)>",
+                "answer": "<final answer DERIVED from the reasoning above (for mcq: a single option letter, e.g. 'B' — exactly one correct option)>",
                 "confidence": "<high|medium|low>",
                 "relevant_cameras": [<int>]
             },
@@ -1672,7 +1670,7 @@ def build_qa_generation_prompt(
                 "instantiated_question": "<altered question>",
                 "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
                 "reasoning": "- <bullet 1>\n- <bullet 2: why this altered placeholder changes the grounding>\n- <bullet 3>",
-                "answer": "<final answer DERIVED from reasoning, different from positive (for mcq: count = num_correct_contrastive)>",
+                "answer": "<final answer DERIVED from reasoning, different from positive (for mcq: a single option letter, generally different from positive)>",
                 "confidence": "<high|medium|low>",
                 "relevant_cameras": [<int>]
             }
@@ -1690,9 +1688,8 @@ NOTES:
 - IMPORTANT: Put 'reasoning' BEFORE 'answer' in every instance. Fill in the answer AFTER writing the reasoning bullets, so the answer is derived from the reasoning (not justified after-the-fact).
 - "prior_disagreements" is OPTIONAL on positive/contrastive. Include it ONLY when your independent check disagrees with a Stage 1B/1C ego-applicability claim (see PRIOR APPLICABILITY VERIFICATION RULE in the system prompt). Schema per entry: {"source": "signal"|"sign", "image_idx": int, "object": str, "prior_says": str, "vlm_says": str, "evidence": str}. The answer itself must still follow the prior's claim.
 - "mcq_options" is REQUIRED for mcq answer_type; omit for other types.
-- For mcq, "answer" is the correct option LETTER(S): single letter ("B") or comma-separated letters ("A,C,D").
-- The number of correct options is pre-assigned per pair in `num_correct_positive` / `num_correct_contrastive` (1-5, sampled randomly). The `answer` string must contain exactly that many letters.
-- Construct exactly 5 options (A-E): `num_correct` correct + `(5 - num_correct)` plausible distractors.
+- For mcq, "answer" is EXACTLY ONE option letter (e.g. "B"). Never comma-separated, never multiple letters.
+- MCQ is single-correct: construct exactly 5 options (A-E) with EXACTLY ONE that is factually correct of the scene plus 4 plausible distractors. The `answer` field is a single option letter (e.g. 'B'). Never assert more than one option as correct.
 - Randomize which positions (A-E) hold the correct options across pairs.
 If contrastive is impossible for a specific pair:
     "contrastive": null,
@@ -1723,7 +1720,7 @@ If contrastive is impossible for a specific pair:
                 },
                 "instantiated_question": "<final question>",
                 "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
-                "answer": "<answer (for mcq: option letter(s), e.g. 'B' or 'A,C,D' — count must match num_correct_positive)>",
+                "answer": "<answer (for mcq: a single option letter, e.g. 'B' — exactly one correct option)>",
                 "reasoning": "- <bullet 1: OBJ ID + spatial data>\n- <bullet 2: camera ref>\n- <bullet 3: conclusion>",
                 "confidence": "<high|medium|low>",
                 "relevant_cameras": [<int>]
@@ -1742,7 +1739,7 @@ If contrastive is impossible for a specific pair:
                 },
                 "instantiated_question": "<altered question>",
                 "mcq_options": {"A": "...", "B": "...", "C": "...", "D": "...", "E": "..."},
-                "answer": "<different answer (for mcq: different letter set than positive, count = num_correct_contrastive)>",
+                "answer": "<different answer (for mcq: a single option letter, different from positive when possible)>",
                 "reasoning": "- <bullet 1>\n- <bullet 2: why answer differs>\n- <bullet 3>",
                 "confidence": "<high|medium|low>",
                 "relevant_cameras": [<int>]
@@ -1760,9 +1757,8 @@ If contrastive is impossible for a specific pair:
 NOTES:
 - "prior_disagreements" is OPTIONAL on positive/contrastive. Include it ONLY when your independent check disagrees with a Stage 1B/1C ego-applicability claim (see PRIOR APPLICABILITY VERIFICATION RULE in the system prompt). Schema per entry: {"source": "signal"|"sign", "image_idx": int, "object": str, "prior_says": str, "vlm_says": str, "evidence": str}. The answer itself must still follow the prior's claim.
 - "mcq_options" is REQUIRED for mcq answer_type; omit for other types.
-- For mcq, "answer" is the correct option LETTER(S): single letter ("B") or comma-separated letters ("A,C,D").
-- The number of correct options is pre-assigned per pair in `num_correct_positive` / `num_correct_contrastive` (1-5, sampled randomly). The `answer` string must contain exactly that many letters.
-- Construct exactly 5 options (A-E): `num_correct` correct + `(5 - num_correct)` plausible distractors.
+- For mcq, "answer" is EXACTLY ONE option letter (e.g. "B"). Never comma-separated, never multiple letters.
+- MCQ is single-correct: construct exactly 5 options (A-E) with EXACTLY ONE that is factually correct of the scene plus 4 plausible distractors. The `answer` field is a single option letter (e.g. 'B'). Never assert more than one option as correct.
 - Randomize which positions (A-E) hold the correct options across pairs.
 If contrastive is impossible for a specific pair:
     "contrastive": null,

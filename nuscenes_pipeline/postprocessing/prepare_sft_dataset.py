@@ -77,6 +77,13 @@ def process_qa_file(
 
     for qa_result in qa_data.get('qa_results', []):
         answer_type = qa_result.get('answer_type')
+        # Tag every SFT sample built from this qa_result with its source
+        # question-bank category. Downstream post-processing steps
+        # (cleanse_obj_references, fix_motion_states, convert_to_qwen3vl_format)
+        # all preserve top-level fields other than `conversations`, so this
+        # tag survives all the way to sft_{train,val}_qwen3vl.json and powers
+        # the curriculum-learning splitter.
+        category = qa_result.get('category')
 
         for pair in qa_result.get('pairs', []):
             # Positive QA
@@ -98,6 +105,7 @@ def process_qa_file(
                     sft_samples.append({
                         "image": image_paths,
                         "conversations": conversations,
+                        "category": category,
                     })
 
             if not no_contrast:
@@ -120,6 +128,7 @@ def process_qa_file(
                         sft_samples.append({
                             "image": image_paths,
                             "conversations": conversations,
+                            "category": category,
                         })
 
                 # VLM-proposed additional contrastives
@@ -141,6 +150,7 @@ def process_qa_file(
                             sft_samples.append({
                                 "image": image_paths,
                                 "conversations": conversations,
+                                "category": category,
                             })
 
     return sft_samples
