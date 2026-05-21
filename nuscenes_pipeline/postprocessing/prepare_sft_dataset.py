@@ -18,6 +18,8 @@ import glob
 import pickle
 import argparse
 import random
+from collections import defaultdict
+
 import numpy as np
 from tqdm import tqdm
 
@@ -26,6 +28,24 @@ from nuscenes_pipeline.modules.sft_prompt_builder import (
     CAMERA_ORDER,
     build_sft_conversations_no_objects,
 )
+
+
+# Curriculum-mode category -> 3-letter abbreviation, plus the canonical
+# easy-perceptual -> hard-reasoning training order.
+CATEGORY_TO_ABBR = {
+    "Observation":                          "OBS",
+    "Identification":                       "IDN",
+    "Attributes_and_States":                "AAS",
+    "Spatial_Relationships_and_Occlusion":  "SRO",
+    "Traffic_Signs_and_Signals":            "TSS",
+    "Road_Markings_and_Lane_Configuration": "RML",
+    "Dynamic_Agents_and_Risk_Assessment":   "DRA",
+    "Right_of_Way_and_Planning":            "RWP",
+    "Environmental_and_Sensor_Conditions":  "ESC",
+    "Causal_and_Hypothetical_Reasoning":    "CHR",
+}
+CURRICULUM_ORDER = ["OBS", "IDN", "AAS", "SRO", "TSS",
+                    "RML", "DRA", "RWP", "ESC", "CHR"]
 
 
 def resolve_image_path(data_root: str, relative_path: str) -> str:
@@ -156,6 +176,23 @@ def process_qa_file(
     return sft_samples
 
 
+def _write_split(samples, output_dir, basename_train, basename_val, val_size_cap, seed):
+    """Shuffle + train/val split + write two JSON files. Returns (train, val) lists."""
+    rng = random.Random(seed)
+    shuffled = list(samples)
+    rng.shuffle(shuffled)
+    val_size = min(val_size_cap, len(shuffled) // 5)
+    val_samples = shuffled[:val_size]
+    train_samples = shuffled[val_size:]
+    train_path = os.path.join(output_dir, basename_train)
+    val_path = os.path.join(output_dir, basename_val)
+    with open(train_path, 'w') as f:
+        json.dump(train_samples, f, ensure_ascii=False)
+    with open(val_path, 'w') as f:
+        json.dump(val_samples, f, ensure_ascii=False)
+    return train_samples, val_samples, train_path, val_path
+
+
 def main():
     parser = argparse.ArgumentParser(description="Prepare nuScenes QA SFT data — NO object list variant")
     parser.add_argument('--qa_dir', type=str,
@@ -170,16 +207,29 @@ def main():
                         help='Output directory for SFT JSON files')
     parser.add_argument('--resize_factor', type=int, default=2)
     parser.add_argument('--val_size', type=int, default=40000,
-                        help='Fixed number of validation samples (rest goes to train)')
+                        help='Fixed number of validation samples (rest goes to train). '
+                             'In --curriculum mode this is applied per category.')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--no_contrast', action='store_true',
                         help='Exclude contrastive and VLM-proposed contrastive QA pairs. '
                              'Output files will have _no_contrast suffix.')
+
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument('--full', dest='mode', action='store_const', const='full',
+                            help='(default) Mix all categories into one flat train+val pair '
+                                 'of files: sft_{train,val}_no_objlist.json.')
+    mode_group.add_argument('--curriculum', dest='mode', action='store_const', const='curriculum',
+                            help='Bucket samples by question-bank category and emit 20 files '
+                                 '(10 train + 10 val) named sft_{train,val}_no_objlist_<ABBR>.json '
+                                 'where ABBR ∈ {OBS,IDN,AAS,SRO,TSS,RML,DRA,RWP,ESC,CHR}.')
+    parser.set_defaults(mode='full')
+
     args = parser.parse_args()
 
     random.seed(args.seed)
     np.random.seed(args.seed)
 
+    print(f"Mode: {args.mode}")
     print("Loading nuScenes data loader...")
     loader = NuScenesDataLoader(pkl_path=args.pkl_path, data_root=args.data_root)
 
@@ -197,36 +247,65 @@ def main():
 
     print(f"\nTotal SFT samples generated: {len(all_samples)}")
 
-    random.shuffle(all_samples)
-    val_size = min(args.val_size, len(all_samples) // 5)  # cap at 20% max
-    val_samples = all_samples[:val_size]
-    train_samples = all_samples[val_size:]
-
-    print(f"Train samples: {len(train_samples)}")
-    print(f"Val samples:   {len(val_samples)}")
-
     os.makedirs(args.output_dir, exist_ok=True)
     suffix = '_no_contrast' if args.no_contrast else ''
-    train_path = os.path.join(args.output_dir, f'sft_train_no_objlist{suffix}.json')
-    val_path = os.path.join(args.output_dir, f'sft_val_no_objlist{suffix}.json')
 
-    with open(train_path, 'w') as f:
-        json.dump(train_samples, f, indent=2, ensure_ascii=False)
-    print(f"Saved train data to: {train_path}")
+    if args.mode == 'full':
+        train_samples, val_samples, train_path, val_path = _write_split(
+            all_samples, args.output_dir,
+            basename_train=f'sft_train_no_objlist{suffix}.json',
+            basename_val=f'sft_val_no_objlist{suffix}.json',
+            val_size_cap=args.val_size,
+            seed=args.seed,
+        )
+        print(f"Train samples: {len(train_samples):,}")
+        print(f"Val samples:   {len(val_samples):,}")
+        print(f"Saved train data to: {train_path}")
+        print(f"Saved val data to:   {val_path}")
+    else:
+        # --curriculum: bucket by category, then independent train/val split per bucket.
+        buckets = defaultdict(list)
+        unknown = []
+        for s in all_samples:
+            abbr = CATEGORY_TO_ABBR.get(s.get('category'))
+            (buckets[abbr] if abbr else unknown).append(s)
+        if unknown:
+            print(f"WARNING: {len(unknown):,} samples with no recognized category "
+                  f"(first category seen: {unknown[0].get('category')!r}). Skipped.")
+        print(f"\n--- Per-category sample counts (pre-split) ---")
+        for abbr in CURRICULUM_ORDER:
+            print(f"  {abbr}: {len(buckets[abbr]):>7,d}")
 
-    with open(val_path, 'w') as f:
-        json.dump(val_samples, f, indent=2, ensure_ascii=False)
-    print(f"Saved val data to: {val_path}")
+        print(f"\n--- Writing per-category train/val files ---")
+        # Per-category val_size cap so each split is well-formed.
+        per_cat_val_cap = max(1, args.val_size // len(CURRICULUM_ORDER))
+        for abbr in CURRICULUM_ORDER:
+            cat_samples = buckets[abbr]
+            if not cat_samples:
+                print(f"  {abbr}: empty bucket, skipping.")
+                continue
+            t, v, tp, vp = _write_split(
+                cat_samples, args.output_dir,
+                basename_train=f'sft_train_no_objlist{suffix}_{abbr}.json',
+                basename_val=f'sft_val_no_objlist{suffix}_{abbr}.json',
+                val_size_cap=per_cat_val_cap,
+                seed=args.seed,
+            )
+            print(f"  {abbr}: train={len(t):>6,d}  val={len(v):>5,d}  -> {os.path.basename(tp)}, {os.path.basename(vp)}")
 
-    # Preview
-    if train_samples:
-        s = train_samples[0]
+    # Preview from the first non-empty written split.
+    preview_source = (train_samples if args.mode == 'full'
+                      else next((buckets[a] for a in CURRICULUM_ORDER if buckets[a]), []))
+    if preview_source:
+        s = preview_source[0]
         print(f"\n--- Sample Preview ---")
         print(f"Images per sample: {len(s['image'])}")
         print(f"Conversation turns: {len(s['conversations'])}")
         print(f"System prompt: {len(s['conversations'][0]['value'])} chars")
         print(f"User message:  {len(s['conversations'][1]['value'])} chars")
         print(f"GPT response:  {len(s['conversations'][2]['value'])} chars")
+        if 'category' in s:
+            print(f"Category:      {s['category']}")
 
 
 if __name__ == '__main__':

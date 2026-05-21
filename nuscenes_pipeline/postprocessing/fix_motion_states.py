@@ -15,6 +15,7 @@ import os
 import sys
 import json
 import re
+import glob
 import argparse
 import numpy as np
 from tqdm import tqdm
@@ -162,6 +163,12 @@ def main():
     parser.add_argument('--suffix', type=str, default='',
                         help='Suffix appended to base filenames, e.g. "_no_contrast" '
                              'to target sft_train_no_objlist_no_contrast.json')
+    parser.add_argument('--curriculum', action='store_true',
+                        help='Also process per-category curriculum files matching '
+                             'sft_{train,val}_no_objlist{suffix}_<ABBR>.json (10 cats x 2 splits = 20 files). '
+                             'The loader, scene analyzer, image index, and per-sample velocity '
+                             'cache are shared across all files so pkl/image-index startup is '
+                             'paid only once.')
     args = parser.parse_args()
 
     data_dir = args.data_dir
@@ -176,7 +183,29 @@ def main():
     print("Building image index...")
     img_index = build_image_index(loader)
 
-    for fname in [f'sft_train_no_objlist{args.suffix}.json', f'sft_val_no_objlist{args.suffix}.json']:
+    # Build the file list. In curriculum mode we also pick up per-category
+    # files; the mixed files are processed first if present so cache warmup
+    # benefits the per-category files downstream.
+    base_train = f'sft_train_no_objlist{args.suffix}.json'
+    base_val   = f'sft_val_no_objlist{args.suffix}.json'
+    fnames = [base_train, base_val]
+    if args.curriculum:
+        train_glob = sorted(glob.glob(os.path.join(
+            data_dir, f'sft_train_no_objlist{args.suffix}_*.json')))
+        val_glob = sorted(glob.glob(os.path.join(
+            data_dir, f'sft_val_no_objlist{args.suffix}_*.json')))
+        fnames += [os.path.basename(p) for p in train_glob]
+        fnames += [os.path.basename(p) for p in val_glob]
+    # De-duplicate while preserving order.
+    seen = set()
+    fnames = [f for f in fnames if not (f in seen or seen.add(f))]
+
+    # Velocity cache is shared across all files: per-category curriculum files
+    # repeatedly reference the same nuScenes samples, so caching here makes
+    # the second-and-later files essentially free for scene-lookups.
+    cache = {}
+
+    for fname in fnames:
         fpath = os.path.join(data_dir, fname)
         if not os.path.exists(fpath):
             print(f"  {fname}: not found, skipping")
@@ -188,7 +217,6 @@ def main():
 
         total_corrections = 0
         samples_fixed = 0
-        cache = {}
 
         for s in tqdm(data, desc=f"  Fixing"):
             gpt = s['conversations'][2]['value']
@@ -232,7 +260,7 @@ def main():
 
         print(f"  {fname}: {len(data)} samples, {samples_fixed} fixed, {total_corrections} corrections")
 
-    print("\nDone!")
+    print(f"\nDone! Processed {len(fnames)} files.")
 
 
 if __name__ == '__main__':

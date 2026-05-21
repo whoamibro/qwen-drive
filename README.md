@@ -551,13 +551,45 @@ python -m nuscenes_pipeline.visualization.qa_visualizer \
 
 ## Post-Processing Pipeline
 
-After Stage 3 finishes, the QA results go through five post-processing steps that produce the final Qwen3-VL SFT training dataset. The single wrapper script runs the whole sequence:
+After Stage 3 finishes, the QA results go through five post-processing steps that produce the final Qwen3-VL SFT training dataset. The single wrapper script runs the whole sequence and supports two output modes:
 
 ```bash
+# Mixed flat files (default): sft_{train,val}_qwen3vl.json
 bash nuscenes_pipeline/scripts/run_postprocessing.sh
+
+# Per-category curriculum-learning files: sft_{train,val}_qwen3vl_<ABBR>.json
+MODE=curriculum bash nuscenes_pipeline/scripts/run_postprocessing.sh
 ```
 
-Override defaults via env vars (`PKL_PATH`, `DATA_ROOT`, `QA_INPUT_DIR`, `SFT_DIR`). End-to-end runtime is ~2 minutes on the 5%-subset (300 samples).
+Override defaults via env vars: `MODE` (`full` | `curriculum`), `PKL_PATH`, `DATA_ROOT`, `QA_INPUT_DIR`, `SFT_DIR`. End-to-end runtime is ~2-3 minutes on the 5%-subset (300 samples) for either mode.
+
+### Mode summary
+
+| | `MODE=full` (default) | `MODE=curriculum` |
+|---|---|---|
+| Step 2 output | 2 mixed files | 20 per-category files (10 cats × {train, val}) |
+| Steps 3 & 5 | run once each | loop over the 20 files |
+| Step 4 | 1 invocation | 1 invocation with `--curriculum` — loader + image-index + velocity cache **shared** across all 20 files so pkl-load startup is paid once |
+| Final outputs | `sft_dataset/sft_{train,val}_qwen3vl.json` | `sft_dataset/sft_{train,val}_qwen3vl_{OBS,IDN,AAS,SRO,TSS,RML,DRA,RWP,ESC,CHR}.json` |
+| Use case | single LoRA run, baseline experiments | curriculum-learning chained stages (easy → hard) |
+
+The 3-letter category abbreviations used throughout:
+
+| Source category | Abbr |
+|---|---|
+| `Observation` | `OBS` |
+| `Identification` | `IDN` |
+| `Attributes_and_States` | `AAS` |
+| `Spatial_Relationships_and_Occlusion` | `SRO` |
+| `Traffic_Signs_and_Signals` | `TSS` |
+| `Road_Markings_and_Lane_Configuration` | `RML` |
+| `Dynamic_Agents_and_Risk_Assessment` | `DRA` |
+| `Right_of_Way_and_Planning` | `RWP` |
+| `Environmental_and_Sensor_Conditions` | `ESC` |
+| `Causal_and_Hypothetical_Reasoning` | `CHR` |
+
+Canonical curriculum order (easy perceptual → hard reasoning):
+`OBS → IDN → AAS → SRO → TSS → RML → DRA → RWP → ESC → CHR`
 
 ### Pipeline Data Flow
 
@@ -572,17 +604,22 @@ answer_generator output (qa_results/sample_*_qa_results.json — OBJ IDs)
 sft_dataset/sample_*_qa_results.json  (bbox-transformed QA results)
         |
         v
-[Step 2] prepare_sft_dataset.py       Build 3-turn SFT conversations.
-                                      MCQ options appended under TASK.
+[Step 2] prepare_sft_dataset.py       Build 3-turn SFT conversations. MCQ options
+                                      appended under TASK. Each sample tagged with
+                                      its source `category`.
+                                      --full       -> 1 train + 1 val file
+                                      --curriculum -> 10 train + 10 val files
         |
         v
-sft_dataset/sft_train_no_objlist.json + sft_val_no_objlist.json
+sft_dataset/sft_{train,val}_no_objlist[_ABBR].json
         |
         v
 [Step 3] cleanse_obj_references.py    Remove leaked OBJ refs (gpt turns only).
         |
         v
 [Step 4] fix_motion_states.py         Correct motion state claims vs GT velocity.
+                                      --curriculum amortizes pkl/index/cache across
+                                      all per-category files in one invocation.
         |
         v
 [Step 5] convert_to_qwen3vl_format.py System turn preserved; gpt value packed
@@ -591,7 +628,7 @@ sft_dataset/sft_train_no_objlist.json + sft_val_no_objlist.json
                                       tokens + 0-1000 normalized coords.
         |
         v
-sft_dataset/sft_{train,val}_qwen3vl.json  (FINAL — ready for SFT training)
+sft_dataset/sft_{train,val}_qwen3vl[_ABBR].json   (FINAL — ready for SFT training)
 ```
 
 ### Step 1: Transform OBJ to Bbox
@@ -620,14 +657,26 @@ python -m nuscenes_pipeline.postprocessing.transform_obj_to_bbox \
 
 ### Step 2: Prepare SFT Dataset
 
-Converts bbox-transformed QA results into Qwen3-VL SFT training format (3-turn conversations: system, user, assistant) **without 3D object list** in the prompt. For MCQ questions, the labeled options `(A)..(E)` are appended under the `TASK:` block so the model sees what each letter refers to.
+Converts bbox-transformed QA results into Qwen3-VL SFT training format (3-turn conversations: system, user, assistant) **without 3D object list** in the prompt. For MCQ questions, the labeled options `(A)..(E)` are appended under the `TASK:` block so the model sees what each letter refers to. Every sample carries a top-level `category` field copied from its source `qa_result` entry — downstream steps preserve this tag.
+
+Two output modes via mutually-exclusive flags:
 
 ```bash
+# Mixed flat files (default)
 python -m nuscenes_pipeline.postprocessing.prepare_sft_dataset \
     --qa_dir sft_dataset \
     --output_dir sft_dataset \
     --data_root ./data/nuscenes \
-    --val_size 40000
+    --val_size 40000 \
+    --full
+
+# 20 per-category files (10 cats × train+val)
+python -m nuscenes_pipeline.postprocessing.prepare_sft_dataset \
+    --qa_dir sft_dataset \
+    --output_dir sft_dataset \
+    --data_root ./data/nuscenes \
+    --val_size 40000 \
+    --curriculum
 ```
 
 | Argument | Type | Default | Description |
@@ -637,10 +686,14 @@ python -m nuscenes_pipeline.postprocessing.prepare_sft_dataset \
 | `--data_root` | str | env `NUSCENES_DATA_ROOT` | nuScenes data directory (where `samples/CAM_*/` images live) |
 | `--output_dir` | str | `sft_dataset` | Output directory for SFT JSON files |
 | `--resize_factor` | int | `2` | Image resize factor |
-| `--val_size` | int | `40000` | Fixed number of validation samples (rest goes to train) |
+| `--val_size` | int | `40000` | Validation sample cap. In `--curriculum` mode this cap is applied per category. |
 | `--seed` | int | `42` | Random seed for train/val split |
+| `--full` | flag | (default) | Emit 2 mixed files: `sft_{train,val}_no_objlist.json` |
+| `--curriculum` | flag | — | Bucket samples by source category and emit 20 files: `sft_{train,val}_no_objlist_{OBS,IDN,AAS,SRO,TSS,RML,DRA,RWP,ESC,CHR}.json` |
 
-**Output:** `sft_train_no_objlist.json` and `sft_val_no_objlist.json`
+**Outputs:**
+- `--full`: `sft_train_no_objlist.json`, `sft_val_no_objlist.json`
+- `--curriculum`: 20 files matching `sft_{train,val}_no_objlist_<ABBR>.json`
 
 ### Step 3: Cleanse OBJ References (Rounds 1-3)
 
@@ -674,17 +727,27 @@ python -m nuscenes_pipeline.postprocessing.cleanse_obj_references \
 
 Cross-references motion state claims in answers against ground truth velocity data. Corrects contradictions where text says "moving" but velocity < 0.1 m/s, or "parked" but velocity > 0.1 m/s.
 
+The loader, scene analyzer, image index, and per-sample velocity cache are built **once** and reused across every input file in a single invocation — so the pkl-load startup cost is paid only once regardless of how many files are processed.
+
 ```bash
+# Full mode (mixed files)
 python -m nuscenes_pipeline.postprocessing.fix_motion_states \
     --data_dir sft_dataset \
     --data_root ./data/nuscenes
+
+# Curriculum mode (also picks up sft_{train,val}_no_objlist_<ABBR>.json)
+python -m nuscenes_pipeline.postprocessing.fix_motion_states \
+    --data_dir sft_dataset \
+    --data_root ./data/nuscenes \
+    --curriculum
 ```
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
-| `--data_dir` | str | `sft_dataset` | Directory containing `sft_train_no_objlist.json` and `sft_val_no_objlist.json` |
+| `--data_dir` | str | `sft_dataset` | Directory containing the SFT JSON files |
 | `--pkl_path` | str | env `NUSCENES_PKL_PATH` | Path to nuScenes pickle file |
 | `--data_root` | str | env `NUSCENES_DATA_ROOT` | nuScenes data directory (where `samples/CAM_*/` images live) |
+| `--curriculum` | flag | `False` | Widen the file list to include all `sft_{train,val}_no_objlist_*.json` matches. Shared loader/index/cache amortize pkl-load across all 20 files. |
 
 **Phrase corrections** (22 patterns):
 - Motion → Stationary (velocity < 0.1 m/s): `"actively riding"` → `"stationary"`, `"in motion"` → `"stationary"`, etc.
@@ -764,8 +827,14 @@ bash nuscenes_pipeline/scripts/run_answer_generator.sh 0 6018 all 8 from_stage1
 bash nuscenes_pipeline/scripts/run_answer_generator.sh 0 6018 all 8
 
 # === Post-Processing (5 steps in one wrapper) ===
+# Default: mixed flat files for single-LoRA training
 bash nuscenes_pipeline/scripts/run_postprocessing.sh
 # Produces sft_dataset/sft_{train,val}_qwen3vl.json — final SFT inputs.
+
+# Or: per-category files for curriculum-learning chained stages
+MODE=curriculum bash nuscenes_pipeline/scripts/run_postprocessing.sh
+# Produces sft_dataset/sft_{train,val}_qwen3vl_{OBS,IDN,...,CHR}.json
+# Train sequentially: OBS -> IDN -> AAS -> SRO -> TSS -> RML -> DRA -> RWP -> ESC -> CHR
 ```
 
 ---
