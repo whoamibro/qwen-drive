@@ -48,6 +48,7 @@ FINETUNE_ROOT = os.path.join(os.path.dirname(__file__), "qwen-vl-finetune")
 sys.path.insert(0, os.path.abspath(FINETUNE_ROOT))
 from qwenvl.data.rope2d import get_rope_index_25
 from qwenvl.train.trainer import replace_qwen2_vl_attention_class
+from qwenvl.train.wsd_scheduler import get_wsd_schedule
 
 IGNORE_INDEX = -100
 
@@ -78,6 +79,12 @@ class ModelArguments:
         default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj",
         metadata={"help": "Comma-separated list of LoRA target modules"},
     )
+    lora_pretrained: Optional[str] = field(
+        default=None,
+        metadata={"help": "Path to a pre-trained LoRA adapter dir; if set, warm-start "
+                          "training from this adapter instead of initialising fresh "
+                          "LoRA weights. Used for curriculum-stage handoff."},
+    )
 
 
 @dataclass
@@ -89,6 +96,13 @@ class DataArguments:
     val_data_path: str = field(
         default="sft_dataset/sft_val_qwen3vl.json",
         metadata={"help": "Path to the validation data JSON file (optional)"},
+    )
+    eval_dataset_paths_json: Optional[str] = field(
+        default=None,
+        metadata={"help": "Path to a JSON mapping {category: val_path}. When set, "
+                          "overrides --val_data_path and configures HF Trainer with a "
+                          "dict-form eval_dataset so per-category eval losses are "
+                          "reported at every eval step."},
     )
     data_flatten: bool = field(default=False)
     # Default max_pixels = 1600 * 900 ~= 1,440,208 (full nuScenes resolution
@@ -105,6 +119,12 @@ class TrainingArguments(HfTrainingArguments):
     model_max_length: int = field(default=8192)
     mm_projector_lr: Optional[float] = field(default=None)
     vision_tower_lr: Optional[float] = field(default=None)
+    # WSD (warmup-stable-decay) scheduler args; only used when
+    # --use_wsd_scheduler True is passed. Other lr_scheduler_type values are
+    # honoured normally when use_wsd_scheduler is False.
+    use_wsd_scheduler: bool = field(default=False)
+    wsd_warmup_ratio: float = field(default=0.10)
+    wsd_decay_ratio: float = field(default=0.20)
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +185,11 @@ def preprocess_with_system_prompt(
 
             conv_msg = [{"role": role, "content": content}]
             encode_id = tokenizer.apply_chat_template(conv_msg)
+            # transformers >=5 returns a BatchEncoding (dict-like, but not a
+            # subclass of dict) containing {"input_ids", "attention_mask"};
+            # older versions returned a plain list of token IDs. Normalize.
+            if not isinstance(encode_id, list):
+                encode_id = encode_id["input_ids"]
             input_id += encode_id
 
             if role in ["user", "system"]:
@@ -413,11 +438,30 @@ def setup_full_finetune(model, model_args):
 
 
 def setup_lora(model, model_args):
-    """Configure model for LoRA fine-tuning."""
+    """Configure model for LoRA fine-tuning.
+
+    When `model_args.lora_pretrained` is set, warm-start from an existing
+    LoRA adapter dir (curriculum-stage handoff) instead of initialising fresh
+    weights. The adapter's own LoraConfig (r/alpha/dropout/target_modules) is
+    used; the CLI lora_* flags are ignored to avoid silent mismatches.
+    """
+    # Freeze everything first
+    for p in model.parameters():
+        p.requires_grad = False
+
+    if model_args.lora_pretrained:
+        from peft import PeftModel
+        rank0_print(f"Warm-starting LoRA from: {model_args.lora_pretrained}")
+        model = PeftModel.from_pretrained(
+            model,
+            model_args.lora_pretrained,
+            is_trainable=True,
+        )
+        model.print_trainable_parameters()
+        return model
+
     from peft import LoraConfig, get_peft_model
-
     target_modules = [m.strip() for m in model_args.lora_target_modules.split(",")]
-
     lora_config = LoraConfig(
         r=model_args.lora_r,
         lora_alpha=model_args.lora_alpha,
@@ -426,14 +470,39 @@ def setup_lora(model, model_args):
         bias="none",
         task_type="CAUSAL_LM",
     )
-
-    # Freeze everything first
-    for p in model.parameters():
-        p.requires_grad = False
-
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
     return model
+
+
+# ---------------------------------------------------------------------------
+# Trainer subclass: plug in WSD (warmup-stable-decay) LR scheduler.
+# ---------------------------------------------------------------------------
+class WSDTrainer(Trainer):
+    """Trainer that swaps in our WSD scheduler when
+    `args.lr_scheduler_type == 'warmup_stable_decay'`. All other scheduler
+    types fall through to the upstream HF implementation unchanged."""
+
+    def create_scheduler(self, num_training_steps: int, optimizer=None):
+        if not getattr(self.args, "use_wsd_scheduler", False):
+            return super().create_scheduler(num_training_steps, optimizer)
+
+        if self.lr_scheduler is not None:
+            return self.lr_scheduler
+
+        opt = optimizer if optimizer is not None else self.optimizer
+        self.lr_scheduler = get_wsd_schedule(
+            opt,
+            num_training_steps=num_training_steps,
+            warmup_ratio=self.args.wsd_warmup_ratio,
+            decay_ratio=self.args.wsd_decay_ratio,
+        )
+        rank0_print(
+            f"[WSDTrainer] WSD scheduler: total_steps={num_training_steps} "
+            f"warmup_ratio={self.args.wsd_warmup_ratio} "
+            f"decay_ratio={self.args.wsd_decay_ratio}"
+        )
+        return self.lr_scheduler
 
 
 # ---------------------------------------------------------------------------
@@ -512,7 +581,27 @@ def train():
     )
 
     eval_dataset = None
-    if data_args.val_data_path and os.path.exists(data_args.val_data_path):
+    # Dict-form eval: per-category losses logged as eval_{cat}_loss every eval step.
+    if data_args.eval_dataset_paths_json and os.path.exists(data_args.eval_dataset_paths_json):
+        with open(data_args.eval_dataset_paths_json) as f:
+            eval_paths = json.load(f)
+        eval_dataset = {}
+        for cat_name, cat_path in eval_paths.items():
+            if not os.path.exists(cat_path):
+                rank0_print(f"[warn] eval dataset for '{cat_name}' not found: {cat_path}")
+                continue
+            eval_dataset[cat_name] = NuScenesVQADataset(
+                data_path=cat_path,
+                tokenizer=tokenizer,
+                image_processor=image_processor,
+                max_pixels=data_args.max_pixels,
+                min_pixels=data_args.min_pixels,
+            )
+        rank0_print(
+            f"Loaded dict-form eval_dataset with {len(eval_dataset)} categories: "
+            f"{sorted(eval_dataset)}"
+        )
+    elif data_args.val_data_path and os.path.exists(data_args.val_data_path):
         eval_dataset = NuScenesVQADataset(
             data_path=data_args.val_data_path,
             tokenizer=tokenizer,
@@ -528,8 +617,9 @@ def train():
     else:
         data_collator = NuScenesDataCollator(tokenizer=tokenizer)
 
-    # Trainer
-    trainer = Trainer(
+    # Trainer (WSDTrainer activates a WSD scheduler when
+    # --lr_scheduler_type warmup_stable_decay; otherwise behaves like Trainer.)
+    trainer = WSDTrainer(
         model=model,
         processing_class=tokenizer,
         args=training_args,

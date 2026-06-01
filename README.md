@@ -893,6 +893,215 @@ NPROC_PER_NODE=8 bash qwen-vl-finetune/scripts/run_nuscenes_full.sh
 | `--data_flatten` | bool | `False` | Pack sequences for efficiency (full fine-tune only) |
 | `--max_pixels` | int | `50176` | Max image pixels |
 | `--min_pixels` | int | `784` | Min image pixels |
+| `--lora_pretrained` | str | `None` | Warm-start LoRA from an existing adapter dir (used for curriculum-stage handoff). When set, the adapter's own LoraConfig is loaded; the `--lora_r/_alpha/_dropout` flags are ignored. |
+| `--eval_dataset_paths_json` | str | `None` | Path to a JSON `{category: val_path}` mapping. When set, HF Trainer runs **per-category eval** at every `eval_steps` and logs `eval_<CAT>_loss` for each entry. Overrides `--val_data_path`. |
+| `--use_wsd_scheduler` | bool | `False` | Activate the warmup-stable-decay LR scheduler (see Curriculum Learning section). |
+| `--wsd_warmup_ratio` | float | `0.10` | Fraction of stage steps used for linear warmup (only if `--use_wsd_scheduler True`). |
+| `--wsd_decay_ratio` | float | `0.20` | Fraction of stage steps used for linear decay to 0 (only if `--use_wsd_scheduler True`). |
+
+> **Note (transformers ≥5):** `tokenizer.apply_chat_template(...)` now returns a `BatchEncoding` (dict-like) instead of a `list[int]`. `preprocess_with_system_prompt` unwraps the `"input_ids"` field on the fly, so the same training script works on both transformers 4.x and 5.x.
+
+---
+
+## Curriculum Learning (Sequential Multi-Stage SFT)
+
+Trains the LoRA adapter across the 10 question categories **in sequence**, easy-perceptual → hard-reasoning, with each stage warm-starting from the previous stage's final adapter. Per-category eval losses are logged on every validation step across **all 10 categories** (not just the current stage's), and a per-category generation-accuracy eval runs at the end of every stage so you can spot catastrophic forgetting in the aggregation report.
+
+### Curriculum order
+
+```
+OBS → IDN → AAS → SRO → TSS → RML → DRA → RWP → ESC → CHR
+```
+
+| code | full name |
+|---|---|
+| OBS | Observation |
+| IDN | Identification |
+| AAS | Attributes & States |
+| SRO | Spatial Relationships & Occlusion |
+| TSS | Traffic Signs & Signals |
+| RML | Road Markings & Lane Configuration |
+| DRA | Dynamic Agents & Risk Assessment |
+| RWP | Right-of-Way & Planning |
+| ESC | Environmental & Sensor Conditions |
+| CHR | Causal & Hypothetical Reasoning |
+
+### Per-stage LR shape (W-S-D)
+
+Each stage has its **own** warmup → stable → decay cycle (default ratios `0.10 / 0.70 / 0.20`):
+
+```
+lr_mult
+   1.0 |         ___________________
+       |       /                     \
+       |     /                         \
+   0.0 |___/                             \___
+            |--warmup--|------stable------|--decay--|
+            0                                       stage_steps
+```
+
+### Components
+
+| Path | Purpose |
+|---|---|
+| `qwen-vl-finetune/configs/curriculum_v1.yaml` | Real curriculum config (10 stages, full epochs). |
+| `qwen-vl-finetune/configs/curriculum_smoke.yaml` | Smoke-test config (20 steps/stage, 20 samples/cat eval) for verifying the pipeline end-to-end in minutes. |
+| `qwen-vl-finetune/qwenvl/curriculum/config.py` | YAML loader and shell-vars emitter (`--emit_shell <i>`). |
+| `qwen-vl-finetune/qwenvl/train/wsd_scheduler.py` | `LambdaLR` factory implementing W-S-D. |
+| `qwen-vl-finetune/scripts/run_curriculum.sh` | Orchestrator. Loops 10 stages: emit env, run `torchrun`, run stage-end eval. |
+| `nuscenes_pipeline/postprocessing/build_eval_subset.py` | Stratified per-category val subset builder (default 200/cat). |
+| `nuscenes_pipeline/scripts/run_stage_end_eval.sh` | Per-stage generation eval wrapper around `sft_model_tester`. |
+| `hf_dataset_train/aggregate_curriculum_reports.py` | Builds the stage × category accuracy matrix + forgetting column. |
+
+### Prerequisites
+
+1. **Per-category SFT files** — produced by post-processing in curriculum mode:
+   ```bash
+   MODE=curriculum bash nuscenes_pipeline/scripts/run_postprocessing.sh
+   # writes sft_dataset/sft_{train,val}_qwen3vl_{OBS,IDN,…,CHR}.json
+   ```
+2. **Stratified eval subset** — sampled once, reused for every stage's in-training eval **and** end-of-stage generation eval:
+   ```bash
+   python -m nuscenes_pipeline.postprocessing.build_eval_subset \
+       --input_dir sft_dataset --n_per_cat 200
+   # writes sft_dataset/eval_subset_200/sft_val_qwen3vl_<CAT>_subset.json + manifest.json
+   ```
+
+### Running the curriculum
+
+#### Smoke test first (always)
+
+20 optimizer steps/stage + 10 samples/cat for the stage-end eval. Confirms warm-start, dict-form eval, WSD shape, generation eval, and aggregation all work end-to-end before you commit GPU-hours.
+
+```bash
+python -m nuscenes_pipeline.postprocessing.build_eval_subset \
+    --n_per_cat 20 --output_dir sft_dataset/eval_subset_smoke
+
+END_STAGE=1 STAGE_END_EVAL_LIMIT=10 \
+    bash qwen-vl-finetune/scripts/run_curriculum.sh \
+    qwen-vl-finetune/configs/curriculum_smoke.yaml
+```
+
+What to look for in the logs:
+- `[WSDTrainer] WSD scheduler: total_steps=<N> warmup_ratio=0.1 decay_ratio=0.2`
+- Stage 1 only: `Warm-starting LoRA from: output/curriculum_smoke/stage_00_OBS`
+- Eval lines containing all of `eval_OBS_loss … eval_CHR_loss`
+- `Eval report saved to: …/eval_report.json` after each stage
+
+#### Single-GPU full curriculum
+
+```bash
+bash qwen-vl-finetune/scripts/run_curriculum.sh \
+    qwen-vl-finetune/configs/curriculum_v1.yaml
+```
+
+#### Multi-GPU (single node)
+
+`NPROC_PER_NODE` is the only mandatory env var. ZeRO-2 + torchrun handle distribution automatically.
+
+```bash
+NPROC_PER_NODE=8 \
+    bash qwen-vl-finetune/scripts/run_curriculum.sh \
+    qwen-vl-finetune/configs/curriculum_v1.yaml
+```
+
+**Effective batch size scales with NPROC_PER_NODE.** With the v1 defaults (`per_device_train_batch_size=1`, `gradient_accumulation_steps=4`), 8 GPUs give effective batch 32 (vs 4 on 1 GPU). Consider scaling peak LR by ~√N when increasing GPU count (e.g. `peak_lr: 5.6e-4` for 8 GPUs ≈ `2e-4 × √8`). Override per-stage in the YAML rather than via env vars.
+
+The WSD step counts adapt automatically — the scheduler is anchored to HF Trainer's computed `num_training_steps`, which already accounts for the distributed batch.
+
+#### Multi-node
+
+```bash
+NPROC_PER_NODE=8 NNODES=2 NODE_RANK=$NODE_RANK \
+MASTER_ADDR=node0.cluster MASTER_PORT=29500 \
+    bash qwen-vl-finetune/scripts/run_curriculum.sh \
+    qwen-vl-finetune/configs/curriculum_v1.yaml
+```
+
+(The orchestrator reads `NNODES` and `MASTER_ADDR`; you'd add `NODE_RANK` handling to `torchrun` if needed.)
+
+### Orchestrator env-var overrides
+
+| Variable | Purpose |
+|---|---|
+| `NPROC_PER_NODE` | GPUs per node (default 1). |
+| `START_STAGE` / `END_STAGE` | Resume a partial curriculum (default 0 / last). |
+| `SKIP_STAGE_END_EVAL=1` | Skip the per-stage generation eval (train only). |
+| `STAGE_END_EVAL_LIMIT=N` | Cap generation-eval samples per category (smoke). |
+| `DEEPSPEED_CONFIG=""` | Disable DeepSpeed entirely (single-GPU dev only). |
+| `DEEPSPEED_CONFIG=path/to/zero3.json` | Use a different DeepSpeed config (e.g. ZeRO-3 if OOM). |
+
+### Output structure
+
+```
+output/curriculum_v1/
+├── stage_00_OBS/
+│   ├── checkpoint-*/                      # HF Trainer checkpoints
+│   ├── adapter_config.json
+│   ├── adapter_model.safetensors          # final LoRA adapter (warm-start for stage 01)
+│   ├── eval_dataset_paths.json            # written by the curriculum config emitter
+│   ├── eval_report.json                   # per-category generation accuracy
+│   └── eval_predictions.json              # per-sample predictions (if --save_predictions)
+├── stage_01_IDN/
+│   └── ...
+├── ...
+├── stage_09_CHR/
+├── curriculum_report.csv                  # 10×10 stage × category accuracy matrix
+└── curriculum_report.md                   # same matrix + forgetting column
+```
+
+### Aggregated report
+
+Runs automatically at the end of `run_curriculum.sh`; can also be invoked manually:
+
+```bash
+python hf_dataset_train/aggregate_curriculum_reports.py \
+    --output_root output/curriculum_v1
+```
+
+The Markdown report includes a **Forgetting** column:
+
+```
+forgetting(CAT) = max(acc_CAT across stages 0..N-1) − acc_CAT at final stage
+```
+
+Positive values indicate the model lost ground on `CAT` by the end of the curriculum — the main risk of sequential SFT.
+
+### Curriculum config schema
+
+Minimal example (defaults shown):
+
+```yaml
+output_root: output/curriculum_v1
+base_model: ckpts/qwen3_vl_8b_instruct
+train_data_dir: sft_dataset
+eval_subset_dir: sft_dataset/eval_subset_200
+eval_categories: [OBS, IDN, AAS, SRO, TSS, RML, DRA, RWP, ESC, CHR]
+
+defaults:
+  epochs: 1
+  max_steps: -1          # -1 = ignore; >0 caps optimizer steps (smoke runs)
+  peak_lr: 2.0e-4
+  wsd: [0.10, 0.70, 0.20]
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 4
+  eval_steps: 500
+  save_steps: 500
+  save_total_limit: 2
+  max_pixels: 1440208
+  min_pixels: 784
+  lora_r: 64
+  lora_alpha: 128
+  full_val_for_stage_end_eval: false   # set true to use the full per-cat val (slow)
+
+stages:
+  - { name: OBS }
+  - { name: IDN, epochs: 2, peak_lr: 1.5e-4 }    # per-stage override example
+  - { name: AAS }
+  # ...
+```
+
+Any field under `defaults` can be overridden per-stage. The loader rejects unknown keys to fail loud rather than silently miss a typo.
 
 ---
 
@@ -925,6 +1134,22 @@ python -m nuscenes_pipeline.modules.sft_model_tester \
 # Override paths via env vars
 LORA_PATH=output_nuscenes_lora_no_objlist_cleansing_qads/checkpoint-11000 \
     bash nuscenes_pipeline/scripts/run_sft_model_tester.sh val 0 20
+
+# Per-category accuracy mode (curriculum stage-end eval)
+# Iterates over sft_val_qwen3vl_<CAT>(_subset)?.json files in the eval dir,
+# runs generation, computes exact-match accuracy on the JSON envelope's
+# "answer" field, and writes eval_report.json into --lora_path.
+python -m nuscenes_pipeline.modules.sft_model_tester \
+    --base_model ckpts/qwen3_vl_8b_instruct \
+    --lora_path output/curriculum_v1/stage_03_SRO \
+    --per_category_eval_dir sft_dataset/eval_subset_200 \
+    --save_predictions
+
+# Or via the curriculum wrapper
+bash nuscenes_pipeline/scripts/run_stage_end_eval.sh \
+    output/curriculum_v1/stage_03_SRO \
+    sft_dataset/eval_subset_200 \
+    ckpts/qwen3_vl_8b_instruct
 ```
 
 ### Arguments
@@ -945,6 +1170,9 @@ LORA_PATH=output_nuscenes_lora_no_objlist_cleansing_qads/checkpoint-11000 \
 | `--max_new_tokens` | int | `2048` | Maximum tokens the model generates per sample |
 | `--output_dir` | str | `sft_dataset` | Directory for output JSON |
 | `--output_name` | str | `sft_test_<timestamp>.json` | Output filename |
+| `--per_category_eval_dir` | str | `None` | Directory of `sft_val_qwen3vl_<CAT>(_subset)?.json` files. When set, runs the **per-category accuracy** code path: iterates each category, runs generation, parses the `{reasoning, grounding, answer}` JSON envelope, exact-matches on the `answer` field, and writes `eval_report.json` into `--lora_path`. The legacy qualitative-test code path (`--from_val`, `--sample_indices`, etc.) is skipped. |
+| `--n_per_cat_limit` | int | `None` | Cap samples per category for smoke runs of the per-category eval. |
+| `--save_predictions` | flag | `False` | Also dump per-sample predictions to `eval_predictions.json` alongside the report. |
 
 ### Input
 

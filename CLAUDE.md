@@ -142,6 +142,25 @@ Point `VAL_DATA` in the training shell script at this file. Reserve the full val
 - With `resize_factor=1` (full 1600×900 input), `max_pixels=802816` gives ~644×1176 per view (966 tokens/view × 6 = 5,796 vision tokens per sample). Still within `model_max_length=8192` but ~5× step time.
 - Bbox labels are now in 1600×900 space by default (after `transform_obj_to_bbox.py --resize_factor 1`, which is the default), so no label-space change is needed when switching between `resize_factor` values at training time.
 
+### `apply_chat_template` return type (transformers ≥5)
+In transformers 5.x, `tokenizer.apply_chat_template(messages)` returns a `BatchEncoding` (dict-like, NOT a `dict` subclass) instead of a plain `list[int]`. The training script's `preprocess_with_system_prompt` was written against the old behavior — `input_id += encode_id` iterating a BatchEncoding yields its 2 *keys*, and `target_mask[:3] = [IGNORE]*3` then grows a 2-element list to 3, tripping the `len(input_id)==len(target)` assertion as `6 != 7`.
+
+**Fix** (in `train_nuscenes_qwen3vl.py:187`):
+```python
+encode_id = tokenizer.apply_chat_template(conv_msg)
+if not isinstance(encode_id, list):   # BatchEncoding → unwrap
+    encode_id = encode_id["input_ids"]
+```
+The `isinstance(encode_id, dict)` check is wrong here because BatchEncoding inherits from UserDict and is not a dict subclass.
+
+### Curriculum-learning pipeline
+- Sequential per-category SFT (OBS → IDN → … → CHR) lives in `qwen-vl-finetune/scripts/run_curriculum.sh` + `qwen-vl-finetune/configs/curriculum_*.yaml`.
+- Each stage warm-starts via `--lora_pretrained <prev-stage-dir>` (loads via `PeftModel.from_pretrained(..., is_trainable=True)`; the prev adapter's own LoraConfig is used — CLI `--lora_r/_alpha/_dropout` flags are ignored).
+- Per-category eval losses are produced by passing a dict-form `eval_dataset` to HF Trainer via `--eval_dataset_paths_json <path>` (a JSON `{cat: val_path}`). HF then logs `eval_<cat>_loss` per key at every eval step.
+- WSD LR schedule lives in `qwen-vl-finetune/qwenvl/train/wsd_scheduler.py` and activates only when `--use_wsd_scheduler True` (default off). `WSDTrainer.create_scheduler` is the override; falls through to upstream for any other scheduler type.
+- Stage-end generation accuracy comes from `sft_model_tester.py --per_category_eval_dir <dir>`, which writes `eval_report.json` into the LoRA dir. The orchestrator wraps this in `nuscenes_pipeline/scripts/run_stage_end_eval.sh`.
+- Final aggregator: `hf_dataset_train/aggregate_curriculum_reports.py` produces `curriculum_report.{csv,md}` with stage×category matrix and a forgetting column.
+
 ---
 
 ## 8. Post-processing Pipeline (in order)

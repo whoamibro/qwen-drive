@@ -32,6 +32,8 @@ Usage (from qwen-drive project root):
 import os
 import sys
 import json
+import glob
+import re
 import argparse
 import torch
 from datetime import datetime
@@ -45,6 +47,12 @@ from nuscenes_pipeline.modules.sft_prompt_builder import (
     CAMERA_ORDER,
     REAR_CAMERAS,
 )
+
+# Indices of rear cameras in the saved SFT sample's "image" list (0-indexed).
+# Order matches CAMERA_ORDER: FL(0), F(1), FR(2), BL(3), B(4), BR(5).
+REAR_IMAGE_INDICES = {3, 4, 5}
+
+CATEGORY_SUBSET_RE = re.compile(r"sft_val_qwen3vl_([A-Z]+)(?:_subset)?\.json$")
 
 
 CAM_LABELS = {
@@ -205,6 +213,185 @@ def build_test_cases(args, loader, img_index):
     return test_cases
 
 
+# ---------------------------------------------------------------------------
+# Per-category generation eval (curriculum stage-end)
+# ---------------------------------------------------------------------------
+def _extract_answer(value: str):
+    """Pull the `answer` field out of the Qwen3-VL unified-JSON envelope."""
+    if not isinstance(value, str):
+        return None
+    try:
+        obj = json.loads(value)
+        if isinstance(obj, dict) and "answer" in obj:
+            return str(obj["answer"])
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # Fallback: regex hunt — models sometimes drop trailing braces.
+    m = re.search(r'"answer"\s*:\s*"([^"]*)"', value, re.DOTALL)
+    if m:
+        return m.group(1)
+    return None
+
+
+def _normalize_answer(ans):
+    """Normalise for exact-match: trim, upper-case + sort MCQ letter sets."""
+    if not ans:
+        return ""
+    s = str(ans).strip().rstrip(".").strip()
+    parts = [p.strip().upper() for p in s.split(",") if p.strip()]
+    if parts and all(len(p) == 1 and p.isalpha() for p in parts):
+        return ",".join(sorted(parts))
+    return s.lower()
+
+
+def _build_messages_from_sft_sample(sample, resize_factor: int = 1):
+    """Reconstruct (system, user) messages from a saved SFT val sample."""
+    img_paths = sample["image"]
+    convs = sample["conversations"]
+    system_text = convs[0]["value"]
+    human_text = convs[1]["value"]
+
+    pil_images = []
+    for i, p in enumerate(img_paths):
+        img = Image.open(p).convert("RGB")
+        if resize_factor > 1:
+            w, h = img.size
+            img = img.resize((w // resize_factor, h // resize_factor), Image.LANCZOS)
+        if i in REAR_IMAGE_INDICES:
+            img = img.transpose(Image.FLIP_LEFT_RIGHT)
+        pil_images.append(img)
+
+    parts = human_text.split("<image>")
+    if len(parts) - 1 != len(pil_images):
+        raise ValueError(
+            f"Image-placeholder count mismatch: {len(parts)-1} <image> tokens vs "
+            f"{len(pil_images)} images in sample"
+        )
+
+    user_content = []
+    for i, part in enumerate(parts):
+        if part:
+            user_content.append({"type": "text", "text": part})
+        if i < len(pil_images):
+            user_content.append({"type": "image", "image": pil_images[i]})
+
+    return [
+        {"role": "system", "content": [{"type": "text", "text": system_text}]},
+        {"role": "user", "content": user_content},
+    ]
+
+
+def _discover_category_subsets(eval_dir: str):
+    """Return dict {CAT: path} for all sft_val_qwen3vl_{CAT}(_subset)?.json in dir."""
+    out = {}
+    for p in sorted(glob.glob(os.path.join(eval_dir, "sft_val_qwen3vl_*.json"))):
+        m = CATEGORY_SUBSET_RE.search(os.path.basename(p))
+        if m:
+            out[m.group(1)] = p
+    return out
+
+
+def run_per_category_eval(args):
+    """Evaluate a LoRA checkpoint per category and write eval_report.json."""
+    model, processor = load_model(args.base_model, args.lora_path)
+
+    cat_paths = _discover_category_subsets(args.per_category_eval_dir)
+    if not cat_paths:
+        raise FileNotFoundError(
+            f"No sft_val_qwen3vl_*.json files in {args.per_category_eval_dir}"
+        )
+    print(f"Per-category eval over {len(cat_paths)} categories: {sorted(cat_paths)}")
+
+    report = {
+        "lora_path": os.path.abspath(args.lora_path),
+        "eval_dir": os.path.abspath(args.per_category_eval_dir),
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "max_new_tokens": args.max_new_tokens,
+        "resize_factor": args.resize_factor,
+        "metrics": {},
+    }
+
+    cat_predictions = {}
+
+    for cat in sorted(cat_paths):
+        path = cat_paths[cat]
+        with open(path) as f:
+            data = json.load(f)
+        if args.n_per_cat_limit and args.n_per_cat_limit < len(data):
+            data = data[: args.n_per_cat_limit]
+
+        n_total = len(data)
+        n_correct = 0
+        n_parsed = 0
+        per_sample = []
+
+        print(f"\n[{cat}] {n_total} samples")
+        for i, sample in enumerate(data):
+            try:
+                messages = _build_messages_from_sft_sample(sample, args.resize_factor)
+                pred_text = run_inference(model, processor, messages, args.max_new_tokens)
+            except Exception as e:
+                print(f"  sample {i}: inference error: {e}")
+                per_sample.append({"i": i, "error": str(e)})
+                continue
+
+            gt_text = sample["conversations"][2]["value"]
+            pred_ans = _extract_answer(pred_text)
+            gt_ans = _extract_answer(gt_text)
+
+            if pred_ans is not None:
+                n_parsed += 1
+            is_correct = (
+                pred_ans is not None
+                and gt_ans is not None
+                and _normalize_answer(pred_ans) == _normalize_answer(gt_ans)
+            )
+            if is_correct:
+                n_correct += 1
+
+            per_sample.append({
+                "i": i,
+                "pred_answer": pred_ans,
+                "gt_answer": gt_ans,
+                "correct": is_correct,
+            })
+            if (i + 1) % 25 == 0 or i == n_total - 1:
+                running = n_correct / max(i + 1, 1)
+                print(f"  [{i+1}/{n_total}] running acc={running:.3f}")
+
+        acc = n_correct / max(n_total, 1)
+        parse_rate = n_parsed / max(n_total, 1)
+        report["metrics"][cat] = {
+            "n": n_total,
+            "n_correct": n_correct,
+            "acc": acc,
+            "parse_rate": parse_rate,
+        }
+        cat_predictions[cat] = per_sample
+        print(f"[{cat}] done: acc={acc:.3f} parse_rate={parse_rate:.3f}")
+
+    macro = (
+        sum(m["acc"] for m in report["metrics"].values()) / len(report["metrics"])
+        if report["metrics"] else 0.0
+    )
+    report["macro_acc"] = macro
+
+    out_path = os.path.join(args.lora_path, "eval_report.json")
+    with open(out_path, "w") as f:
+        json.dump(report, f, indent=2)
+
+    if args.save_predictions:
+        preds_path = os.path.join(args.lora_path, "eval_predictions.json")
+        with open(preds_path, "w") as f:
+            json.dump(cat_predictions, f, indent=2)
+        print(f"Per-sample predictions saved to: {preds_path}")
+
+    print(f"\nEval report saved to: {out_path}")
+    print(f"Macro accuracy: {macro:.3f}")
+    for cat, m in report["metrics"].items():
+        print(f"  {cat:>3s}  acc={m['acc']:.3f}  (n={m['n']}, parsed={m['parse_rate']:.2f})")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Qualitative test for SFT-trained Qwen3-VL")
 
@@ -239,7 +426,24 @@ def main():
                         default='/home/yongjinjeon/workspace/qa_dataset/qwen3vl_8b_sft_dataset')
     parser.add_argument('--output_name', type=str, default=None)
 
+    # Per-category eval mode (curriculum stage-end)
+    parser.add_argument('--per_category_eval_dir', type=str, default=None,
+                        help="Directory containing sft_val_qwen3vl_{CAT}(_subset)?.json files. "
+                             "When set, run per-category accuracy eval and write "
+                             "eval_report.json into --lora_path; the legacy qualitative-test "
+                             "code path is skipped.")
+    parser.add_argument('--n_per_cat_limit', type=int, default=None,
+                        help="Cap samples per category (debug/smoke).")
+    parser.add_argument('--save_predictions', action='store_true',
+                        help="Also dump per-sample predictions to eval_predictions.json.")
+
     args = parser.parse_args()
+
+    # Per-category eval branch — skips the legacy NuScenesDataLoader path.
+    if args.per_category_eval_dir:
+        run_per_category_eval(args)
+        return
+
     os.makedirs(args.output_dir, exist_ok=True)
 
     # Load model and nuScenes

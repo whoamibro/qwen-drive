@@ -1,0 +1,59 @@
+# Curriculum-learning schedule for Qwen3-VL 8B LoRA SFT.
+#
+# Each stage warm-starts the LoRA adapter from the previous stage's output dir.
+# Each stage's LR follows an independent warmup -> stable -> decay cycle whose
+# fractions live under `defaults.wsd` (overridable per stage). In-training eval
+# runs on every category in `eval_categories` at `eval_steps`; end-of-stage
+# generation eval reuses the same per-category subsets in `eval_subset_dir`.
+#
+# To run:
+#   python -m nuscenes_pipeline.postprocessing.build_eval_subset --n_per_cat 200
+#   bash qwen-vl-finetune/scripts/run_curriculum.sh qwen-vl-finetune/configs/curriculum_v1.yaml
+
+output_root: output/curriculum_v1
+base_model: ckpts/qwen3_vl_8b_instruct
+train_data_dir: sft_dataset
+eval_subset_dir: sft_dataset/eval_subset_200
+eval_categories: [OBS, IDN, AAS, SRO, TSS, RML, DRA, RWP, ESC, CHR]
+
+defaults:
+  epochs: 1
+  peak_lr: 2.0e-4
+  # warmup / stable / decay fractions of each stage's total optimizer steps.
+  wsd: [0.10, 0.70, 0.20]
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 2
+  gradient_accumulation_steps: 4
+  eval_steps: 500
+  save_steps: 500
+  save_total_limit: 2
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  model_max_length: 16384
+  max_pixels: 1440208
+  min_pixels: 784
+  lora_r: 64
+  lora_alpha: 128
+  lora_dropout: 0.05
+  lora_target_modules: q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj
+  gradient_checkpointing: true
+  dataloader_num_workers: 4
+  bf16: true
+  report_to: tensorboard
+  # Stage-end generation eval: reuses eval_subset_dir by default.
+  # Set `full_val_for_stage_end_eval: true` to switch to the full per-category
+  # val files (sft_dataset/sft_val_qwen3vl_{CAT}.json) instead.
+  full_val_for_stage_end_eval: false
+
+# Sequential curriculum: easy perceptual -> hard reasoning.
+stages:
+  - { name: OBS }
+  - { name: IDN }
+  - { name: AAS }
+  - { name: SRO }
+  - { name: TSS }
+  - { name: RML }
+  - { name: DRA }
+  - { name: RWP }
+  - { name: ESC }
+  - { name: CHR }

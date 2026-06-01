@@ -1,0 +1,61 @@
+# Smoke-test curriculum: tiny step budget per stage so we can verify the
+# full pipeline end-to-end (warm-start, dict-form eval, WSD schedule, stage-end
+# generation eval, aggregation report) in a few minutes per stage.
+#
+# Prereqs:
+#   python -m nuscenes_pipeline.postprocessing.build_eval_subset \
+#       --n_per_cat 20 --output_dir sft_dataset/eval_subset_smoke
+#
+# Run only stages 0-1 (and cap generation eval to 10 samples/cat):
+#   END_STAGE=1 STAGE_END_EVAL_LIMIT=10 \
+#       bash qwen-vl-finetune/scripts/run_curriculum.sh \
+#       qwen-vl-finetune/configs/curriculum_smoke.yaml
+
+output_root: output/curriculum_smoke
+base_model: ckpts/qwen3_vl_8b_instruct
+train_data_dir: sft_dataset
+eval_subset_dir: sft_dataset/eval_subset_smoke
+eval_categories: [OBS, IDN, AAS, SRO, TSS, RML, DRA, RWP, ESC, CHR]
+
+defaults:
+  epochs: 1
+  # Cap each stage at 20 optimizer steps to keep the smoke run short while
+  # still exercising warmup -> stable -> decay (with the default 10/70/20
+  # ratios this gives 2 warmup, 14 stable, 4 decay).
+  max_steps: 20
+  peak_lr: 2.0e-4
+  wsd: [0.10, 0.70, 0.20]
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 2
+  gradient_accumulation_steps: 4
+  # Eval & save very frequently so we can see per-category losses and the
+  # adapter handoff path light up within a short run.
+  eval_steps: 10
+  save_steps: 20
+  save_total_limit: 1
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  model_max_length: 16384
+  max_pixels: 1440208
+  min_pixels: 784
+  lora_r: 64
+  lora_alpha: 128
+  lora_dropout: 0.05
+  lora_target_modules: q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj
+  gradient_checkpointing: true
+  dataloader_num_workers: 2
+  bf16: true
+  report_to: tensorboard
+  full_val_for_stage_end_eval: false
+
+stages:
+  - { name: OBS }
+  - { name: IDN }
+  - { name: AAS }
+  - { name: SRO }
+  - { name: TSS }
+  - { name: RML }
+  - { name: DRA }
+  - { name: RWP }
+  - { name: ESC }
+  - { name: CHR }
