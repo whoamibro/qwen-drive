@@ -106,6 +106,11 @@ def replace_obj_refs(text, obj_mapping):
       - "OBJ 30 (pedestrian, 19.6m ahead...)" -> "pedestrian (19.6m ahead, Image 2 bbox[...])"
       - "OBJs 3, 8, 11" -> "traffic_cone (Image 2 bbox[...]), car (Image 5 bbox[...]), ..."
     """
+    # Canonical reasoning shape is a newline-joined bullet string, but the VLM
+    # occasionally emits a JSON array of bullets instead. Fold to the canonical
+    # form so the regex pipeline (and downstream consumers) see a string.
+    if isinstance(text, list):
+        text = "\n".join(text)
     if not obj_mapping:
         return text
 
