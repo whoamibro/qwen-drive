@@ -435,8 +435,11 @@ qwen-drive/
       __init__.py
       bev_generator.py                BEV visualization with ego, objects, velocities
       make_video.py                   Combine panoramic + BEV images into video
+      make_scene_videos.py            Per-scene video reels (multi-sample stitching)
+      pan_generator.py                6-view panoramic image builder
       pretty_formatting.py            Clean and format JSON result fields
       qa_visualizer.py                Flask web dashboard for QA dataset verification
+      eval_sample_visualizer.py       Flask dashboard for v2 eval outputs — GT vs PRED side-by-side (§17)
     postprocessing/
       __init__.py
       transform_obj_to_bbox.py        Replace OBJ IDs with 2D bbox descriptions; rear cameras x-flipped
@@ -444,6 +447,7 @@ qwen-drive/
       fix_motion_states.py            Correct motion claims against GT velocity
       prepare_sft_dataset.py          Build SFT train/val JSON (system + MCQ options + 6-image prompt)
       convert_to_qwen3vl_format.py    Pack gpt response into reasoning/grounding/answer JSON with native grounding tokens
+      build_global_grounded_pool.py   Pre-materialize the global grounded pool for GF (§14)
       count_qa_stats.py               QA pair statistics utility
     scripts/
       run_risk_assessment.sh          Shell script for Stage 1A
@@ -453,10 +457,39 @@ qwen-drive/
       run_postprocessing.sh           Wrapper for the full 5-step post-processing pipeline
       run_sft_model_tester.sh         Shell script for SFT model inference test
       show_prompts.py                 Prompt preview (prints system+user prompts without inference)
+  qwen-vl-finetune/
+    configs/
+      curriculum_v1.yaml              Per-stage WSD baseline (sequential 10-stage curriculum)
+      curriculum_v2.yaml              v2 schedule + composite-loss coefficients (§13)
+    qwenvl/
+      curriculum/
+        config.py                     Stage dataclass loader; emit_shell helper for shell-script orchestration
+      train/
+        wsd_scheduler.py              Warmup-Stable-Decay LR schedule (per-stage cycle)
+        composite_loss.py             Six-term composite SFT loss (§13)
+        token_role_masks.py           Per-token role masks (answer / gate / coord / image_idx)
+      experiments/                    Ablation framework (§14)
+        config.py                     CLI parser + ExpConfig dataclass + manifest writer
+        samplers.py                   CompositeSampler — two-stage per-category uniform; §5.2 composition
+        lr_schedules.py               global_wsd + per_stage_wsd_relaxed LR variants
+        train.py                      Ablation training entry point (subclasses v2 trainer)
+        run_experiment.py             Orchestrator: one experiment per invocation
+        eval_run.py                   Standalone eval for --skip_eval trained experiments
+        aggregate.py                  _master_comparison.{csv,md} builder
+        verify_sampler.py             Offline acceptance gate for sampler exposure ratios
+    scripts/
+      run_curriculum_v2.sh            10-stage v2 training orchestrator (§13)
+      eval_curriculum_v2.sh           Standalone per-stage eval pass (§13)
+      eval_curriculum_v2_parallel.sh  8-stage fan-out across 8 GPUs (§13)
+      eval_intermediate_8stages.sh    Hardcoded mapping for known intermediate checkpoints (§13)
+      eval_single_stage_8gpu.sh       Sample-stride parallelism within one stage (§13)
+      run_experiment.sh               Wrapper for the ablation launcher (§14)
+      eval_experiment.sh              Wrapper for the ablation eval_run (§14)
 ```
 
 ```
   train_nuscenes_qwen3vl.py           SFT training script (LoRA / full)
+  train_nuscenes_qwen3vl_v2.py        v2 training script with composite loss + per-cat eval (§13)
 ```
 
 ### Core Modules
@@ -575,6 +608,29 @@ python -m nuscenes_pipeline.visualization.qa_visualizer \
 - `r`: jump to a random sample
 
 **Requires:** `flask`, `matplotlib`, `Pillow`
+
+### pan_generator.py
+
+Builds a single 6-view panoramic PNG (FL / F / FR on top, BL / B / BR on bottom; rear views x-flipped) from a nuScenes sample. Pairs with `bev_generator.py` outputs to feed `make_video.py`.
+
+```bash
+python -m nuscenes_pipeline.visualization.pan_generator \
+    --start_idx 0 --end_idx 100 --output_dir pan_vis_results
+```
+
+### make_scene_videos.py
+
+Stitches the per-sample outputs of `pan_generator.py` + `bev_generator.py` into one MP4 video **per nuScenes scene** (vs `make_video.py`'s single combined video). Useful for inspecting model behavior temporally within each scene.
+
+```bash
+python -m nuscenes_pipeline.visualization.make_scene_videos \
+    --vis_dir pan_vis_results --bev_dir bev_vis_results \
+    --output_dir scene_videos
+```
+
+### eval_sample_visualizer.py
+
+Flask dashboard for the v2 evaluation outputs (§17). Renders GT vs PRED side-by-side: green / pink box overlays on 6-view images, parsed reasoning and answer fields, per-box IoU + view-OK match table. See [§17](#eval-sample-visualizer-browser-based) for launch commands.
 
 ---
 
@@ -933,6 +989,13 @@ NPROC_PER_NODE=8 bash qwen-vl-finetune/scripts/run_nuscenes_full.sh
 ---
 
 ## Curriculum Learning (Sequential Multi-Stage SFT)
+
+> **Note**: this section documents the **v1 curriculum** (sequential per-category SFT with standard causal CE).
+> The **v2 successor** ([§13](#curriculum-v2-training-and-evaluation)) adds a six-term composite SFT loss
+> (answer / gate / view / IoU weighting) plus per-category evaluation metrics (`answer_acc`, `view_acc`,
+> `grounding_acc@<iou>`, `grounding_format_valid`). Both pipelines still ship and stay in sync; pick v1 for
+> the simpler baseline, v2 for the ablation framework ([§14](#ablation-experiments-framework)) and the
+> grounding-aware loss.
 
 Trains the LoRA adapter across the 10 question categories **in sequence**, easy-perceptual → hard-reasoning, with each stage warm-starting from the previous stage's final adapter. Per-category eval losses are logged on every validation step across **all 10 categories** (not just the current stage's), and a per-category generation-accuracy eval runs at the end of every stage so you can spot catastrophic forgetting in the aggregation report.
 
@@ -1339,10 +1402,10 @@ python -m nuscenes_pipeline.modules.sft_model_tester \
 LORA_PATH=output_nuscenes_lora_no_objlist_cleansing_qads/checkpoint-11000 \
     bash nuscenes_pipeline/scripts/run_sft_model_tester.sh val 0 20
 
-# Per-category accuracy mode (curriculum stage-end eval)
-# Iterates over sft_val_qwen3vl_<CAT>(_subset)?.json files in the eval dir,
-# runs generation, computes exact-match accuracy on the JSON envelope's
-# "answer" field, and writes eval_report.json into --lora_path.
+# Per-category accuracy mode (curriculum stage-end eval) — v1 schema:
+# answer-only exact-match. Iterates sft_val_qwen3vl_<CAT>(_subset)?.json
+# files in the eval dir, runs generation, parses the answer field, writes
+# eval_report.json into --lora_path.
 python -m nuscenes_pipeline.modules.sft_model_tester \
     --base_model ckpts/qwen3_vl_8b_instruct \
     --lora_path output/curriculum_v1/stage_03_SRO \
@@ -1354,6 +1417,17 @@ bash nuscenes_pipeline/scripts/run_stage_end_eval.sh \
     output/curriculum_v1/stage_03_SRO \
     sft_dataset/eval_subset_200 \
     ckpts/qwen3_vl_8b_instruct
+
+# v2 per-category eval — adds --eval_v2 for the four-metric schema:
+# answer_acc, view_acc, grounding_acc@<iou>, grounding_format_valid.
+# Predicted bbox extraction operates on raw token IDs (handles special-token
+# stripping correctly). See §13 for full v2 workflow.
+python -m nuscenes_pipeline.modules.sft_model_tester \
+    --base_model ckpts/qwen3_vl_8b_instruct \
+    --lora_path output/curriculum_v2_<run>/stage_03_SRO \
+    --per_category_eval_dir sft_dataset/eval_subset_200 \
+    --eval_v2 --iou_threshold 0.8 \
+    --save_predictions
 ```
 
 ### Arguments
@@ -1411,6 +1485,14 @@ The `"gt"` turn is only added in `--from_val` mode. Because the format matches t
 ---
 
 ## Evaluation & Benchmarks
+
+> **Note**: this section documents the original **qualitative inspection workflow** (predict on val
+> samples + load into `qa_visualizer` for side-by-side review). For **quantitative per-category
+> evaluation** (answer accuracy + view accuracy + grounding IoU + grounding format-validity), see the
+> v2 eval flow in [§13](#curriculum-v2-training-and-evaluation) and the ablation-framework eval in
+> [§14](#ablation-experiments-framework). The v2 / ablation paths use `sft_model_tester --eval_v2` and
+> produce `eval_report.json` per checkpoint plus a `summary.json` per run; this section's workflow is
+> still useful for one-off ad-hoc inspection.
 
 Evaluation of the SFT-tuned Qwen3-VL model is performed **on the in-house nuScenes VLM dataset built by this pipeline** (not on general-purpose VLM benchmarks). The goal is to verify that the fine-tuned model answers autonomous-driving questions grounded in the 6-view surround images, ego state, and scene context produced by Stages 1–3.
 
