@@ -49,6 +49,16 @@ class Stage:
     bf16: bool = True
     report_to: str = "tensorboard"
     full_val_for_stage_end_eval: bool = False
+    # v2 composite-loss knobs (Stage may override per-category).
+    w_ans: float = 0.0
+    w_gate: float = 0.0
+    lam_view: float = 0.0
+    lam_iou: float = 0.0
+    lam_klal: float = 0.0
+    klal_layers: str = "-1"
+    iou_alpha: float = 1.0
+    view_class_weight: str = ""    # "" | "auto" | JSON list of 6 floats
+    max_assistant_tokens: int = 6000
 
 
 @dataclass
@@ -79,12 +89,20 @@ def load_curriculum(path: str) -> Curriculum:
         raw = yaml.safe_load(f)
 
     defaults = raw.get("defaults", {}) or {}
+    # Top-level `loss:` block flattens into defaults (per md Section 10
+    # config schema). Per-stage overrides may also live under a `loss:` key.
+    loss_defaults = raw.get("loss", {}) or {}
+    defaults = _merge(defaults, loss_defaults)
+
     stages_raw = raw["stages"]
     stage_fields = {f.name for f in Stage.__dataclass_fields__.values()}
 
     stages: List[Stage] = []
     for st in stages_raw:
+        # Allow a `loss:` sub-block at the stage level too.
+        st_loss = st.pop("loss", {}) if isinstance(st, dict) else {}
         merged = _merge(defaults, st)
+        merged = _merge(merged, st_loss)
         # Filter to fields Stage accepts; reject unknown keys to fail loudly.
         unknown = set(merged) - stage_fields
         if unknown:
@@ -164,6 +182,17 @@ def emit_shell(curriculum: Curriculum, stage_idx: int) -> str:
         f"STAGE_BF16={'true' if stage.bf16 else 'false'}",
         f"STAGE_REPORT_TO={stage.report_to}",
         f"STAGE_FULL_VAL_FOR_END_EVAL={'true' if stage.full_val_for_stage_end_eval else 'false'}",
+        # v2 composite-loss knobs. Empty `view_class_weight` is emitted as
+        # the empty string (= disabled); shell quotes it as needed.
+        f"STAGE_W_ANS={stage.w_ans}",
+        f"STAGE_W_GATE={stage.w_gate}",
+        f"STAGE_LAM_VIEW={stage.lam_view}",
+        f"STAGE_LAM_IOU={stage.lam_iou}",
+        f"STAGE_LAM_KLAL={stage.lam_klal}",
+        f"STAGE_KLAL_LAYERS={stage.klal_layers}",
+        f"STAGE_IOU_ALPHA={stage.iou_alpha}",
+        f"STAGE_VIEW_CLASS_WEIGHT={stage.view_class_weight}",
+        f"STAGE_MAX_ASSISTANT_TOKENS={stage.max_assistant_tokens}",
     ]
 
     os.makedirs(out_dir, exist_ok=True)
