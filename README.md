@@ -2,6 +2,35 @@
 
 A multi-stage VQA pipeline for autonomous driving scene understanding on the nuScenes dataset, powered by Qwen3-VL served via vLLM.
 
+## Table of Contents
+
+### Autolabel pipeline (raw nuScenes → QA pairs)
+1. [Pipeline Overview](#pipeline-overview)
+2. [Prerequisites](#prerequisites)
+3. [Stage 1A: Risk Assessment](#stage-1a-risk-assessment)
+4. [Stage 1B: Traffic Analysis](#stage-1b-traffic-analysis)
+5. [Stage 2: Question Selector](#stage-2-question-selector)
+6. [Stage 3: Answer Generator](#stage-3-answer-generator)
+7. [Package Structure](#package-structure)
+8. [Visualization Tools](#visualization-tools)
+9. [Post-Processing Pipeline](#post-processing-pipeline)
+10. [Full Pipeline Example (End-to-End)](#full-pipeline-example-end-to-end)
+
+### SFT training
+11. [SFT Training](#sft-training)
+12. [Curriculum Learning (Sequential Multi-Stage SFT)](#curriculum-learning-sequential-multi-stage-sft)
+13. [Curriculum-v2 Training and Evaluation](#curriculum-v2-training-and-evaluation)
+14. [Ablation Experiments Framework](#ablation-experiments-framework)
+
+### Evaluation and inspection
+15. [SFT Model Testing (Qualitative Inference)](#sft-model-testing-qualitative-inference)
+16. [Evaluation & Benchmarks](#evaluation--benchmarks)
+17. [Eval Sample Visualizer (Browser-Based)](#eval-sample-visualizer-browser-based)
+18. [Resize Factor Guide](#resize-factor-guide)
+19. [Supporting Documentation](#supporting-documentation)
+
+---
+
 ## Pipeline Overview
 
 ```
@@ -1105,6 +1134,181 @@ Any field under `defaults` can be overridden per-stage. The loader rejects unkno
 
 ---
 
+## Curriculum-v2 Training and Evaluation
+
+Curriculum-v2 builds on the per-category curriculum (§12) with two additions:
+
+1. **Composite SFT loss** — six terms beyond standard causal CE: extra weights
+   on the answer field and the empty-vs-non-empty grounding gate, a 6-way
+   restricted softmax on the `image_idx` digit, and an IoU-aware
+   re-weighting of coordinate tokens. See `loss_system.md` for the
+   per-term spec and `loss_improvement_design_v3.md` for the design
+   rationale.
+2. **Per-category evaluation** — `sft_model_tester --eval_v2` reports
+   `answer_acc`, `view_acc`, `grounding_acc@<iou>`, and
+   `grounding_format_valid` per category. Prediction box extraction
+   operates on raw token IDs so box delimiter special tokens aren't
+   stripped at decode time.
+
+### Run the v2 curriculum (10 stages)
+
+```bash
+# Training only (skip in-training + per-stage gen eval)
+SKIP_INTRAINING_EVAL=1 SKIP_STAGE_END_EVAL=1 NPROC_PER_NODE=8 \
+    bash qwen-vl-finetune/scripts/run_curriculum_v2.sh \
+        qwen-vl-finetune/configs/curriculum_v2.yaml
+
+# Standalone evaluation across all 10 stages × all 10 categories
+bash qwen-vl-finetune/scripts/eval_curriculum_v2.sh \
+    qwen-vl-finetune/configs/curriculum_v2.yaml
+
+# Parallel evaluation: 8 stages × 8 GPUs (~30 min instead of ~4 hours)
+bash qwen-vl-finetune/scripts/eval_curriculum_v2_parallel.sh \
+    qwen-vl-finetune/configs/curriculum_v2.yaml
+
+# Single-stage eval across 8 GPUs (sample-stride parallelism, ~4 min)
+GPU_IDS="0,1,2,3,4,5,6,7" \
+    bash qwen-vl-finetune/scripts/eval_single_stage_8gpu.sh \
+        stage_04_TSS [checkpoint-XXX]
+```
+
+### Output structure
+
+```
+output/curriculum_v2_<run>/
+├── stage_00_OBS/ … stage_09_CHR/
+│   ├── adapter_*.safetensors
+│   ├── eval_dataset_paths.json
+│   ├── eval_report.json           # per-stage, all 10 cats
+│   └── eval_predictions.json
+├── curriculum_report.csv          # stage × category matrix
+└── curriculum_report.md
+```
+
+Per-step training logs surface the composite-loss breakdown (`loss_base_ce`,
+`loss_answer`, `loss_answer_w`, … plus `grounded_frac`); the invariant
+`loss == loss_base_ce + Σ loss_*_w` holds by construction.
+
+### Reference docs
+
+- `loss_system.md` — as-built reference for the six loss terms
+- `curriculum_v2_loss.md` — narrative explanation with code snippets
+- `loss_improvement_design_v3.md` — design rationale (frozen invariants,
+  per-term motivation, R-VLM / KLAL references)
+- `curriculum_pipeline_analysis.md` — v1 pipeline architecture analysis
+
+---
+
+## Ablation Experiments Framework
+
+Argument-driven launcher for the 16-run factorial ablation matrix
+(`B0, F1, F2, F3, L1, L2, S7, C01–C08, C12`). Each run is fully
+specified by four CLI knobs and produces a self-contained
+`run_manifest.json` for reproducibility. No static preset table — the
+16 canonical flag combinations live as a reference table in the spec.
+
+### Knobs
+
+| Knob | Values | Spec |
+|---|---|---|
+| `--mode` | `sequential` \| `mixed` | §2.1 |
+| `--lr_schedule` | `per_stage_wsd` \| `global_wsd` \| `per_stage_wsd_relaxed` | §2.4 |
+| `--grounding_floor` | `off` \| float in (0, 1) | §2.2 |
+| `--replay` | `off` \| float in (0, 1) | §2.3 |
+
+### Run a single experiment
+
+```bash
+# Examples
+bash qwen-vl-finetune/scripts/run_experiment.sh \
+    --exp_id B0 --mode sequential --lr_schedule per_stage_wsd \
+    --grounding_floor off --replay off \
+    --output_root output/curriculum_v2_exp --seed 0
+
+bash qwen-vl-finetune/scripts/run_experiment.sh \
+    --exp_id F3 --mode mixed --lr_schedule global_wsd \
+    --grounding_floor off --replay off \
+    --output_root output/curriculum_v2_exp --seed 0
+
+# Dry-run (no GPU, prints resolved config, exits)
+bash qwen-vl-finetune/scripts/run_experiment.sh \
+    --exp_id C12 --mode mixed --lr_schedule global_wsd \
+    --grounding_floor 0.25 --replay 0.10 \
+    --output_root /tmp --dry_run
+```
+
+### Split training and evaluation
+
+For long runs, `--skip_eval` trains only (skips per-stage gen-eval and
+`summary.json`). Run evaluation later via `eval_experiment.sh`:
+
+```bash
+# Train only
+bash qwen-vl-finetune/scripts/run_experiment.sh \
+    --exp_id F1 --mode sequential --lr_schedule per_stage_wsd \
+    --grounding_floor 0.25 --replay off \
+    --output_root output/curriculum_v2_exp --seed 0 \
+    --skip_eval
+
+# Evaluate later (idempotent — re-running skips completed checkpoints)
+bash qwen-vl-finetune/scripts/eval_experiment.sh \
+    --run_dir output/curriculum_v2_exp/F1__seed0
+```
+
+### Sampler acceptance gate
+
+Before launching any GF / ER / mixed experiment, verify the realized
+per-category exposure matches the spec's expected weights:
+
+```bash
+PYTHONPATH=qwen-vl-finetune python -m qwenvl.experiments.verify_sampler \
+    --mode mixed --lr_schedule global_wsd \
+    --grounding_floor 0.25 --replay off \
+    --num_draws 100000
+```
+
+Exits non-zero if any (pool, category) cell deviates more than
+`--tolerance` (default 2%) from the expected `1/N`. Catches sampler /
+spec mismatches before GPU time is spent.
+
+### Master comparison
+
+After eval finishes for each experiment:
+
+```bash
+PYTHONPATH=qwen-vl-finetune python -m qwenvl.experiments.aggregate \
+    --output_root output/curriculum_v2_exp
+```
+
+Writes `_master_comparison.{csv,md}` sorted by `collapse_indicator`
+(worst format-validity over checkpoints) so collapses surface at the
+top of the table. Re-runnable safely after every new experiment.
+
+### Optional: pre-materialize the global grounded pool
+
+Saves ~5 min per stage startup on GF runs (avoids re-filtering the 10
+per-category JSONs at every torchrun init):
+
+```bash
+python -m nuscenes_pipeline.postprocessing.build_global_grounded_pool
+```
+
+Orchestrator auto-detects the resulting
+`sft_dataset/sft_train_qwen3vl_GLOBAL_GROUNDED.json` and prefers it
+over the per-category list.
+
+### Reference docs
+
+- `curriculum_v2_ablation_experiments.md` — authoritative spec (knob
+  semantics, composition rules, 16-run matrix, headline metrics,
+  output layout, frozen-loss invariant, deferred difficulty-weighted
+  mixture in Appendix A)
+- `Mixed-train-implementation-issue.md` — postmortem for the
+  per-category-uniform sampler fix (size-proportional bug, root cause,
+  fix, validation across 12 sampler configurations)
+
+---
+
 ## SFT Model Testing (Qualitative Inference)
 
 Runs inference on a LoRA-fine-tuned Qwen3-VL-8B model using the **same prompt structure as training** (no-objlist variant: 6 surround-view images + ego status + task question). Saves results in the same format as `sft_train_no_objlist.json` so they can be loaded into the `qa_visualizer` dashboard for visual side-by-side comparison with ground truth answers.
@@ -1288,6 +1492,37 @@ The dashboard renders the 6-view panorama with question/answer bounding boxes (g
 
 ---
 
+## Eval Sample Visualizer (Browser-Based)
+
+Flask app for qualitative inspection of the v2 evaluation outputs.
+Mirrors `qa_visualizer.py`'s 6-view image layout but specialized for
+GT-vs-PRED comparison: overlays GT boxes in green, matched predicted
+boxes in pink, and spurious predictions in dashed pink, alongside a
+side-by-side reasoning / answer / per-box-match panel.
+
+### Launch
+
+```bash
+# Single experiment
+python -m nuscenes_pipeline.visualization.eval_sample_visualizer \
+    --eval_predictions output/curriculum_v2_exp/B0__seed0/stage_00_OBS/eval_predictions.json \
+    --val_subset_dir   sft_dataset/eval_subset_200 \
+    --port 6061
+
+# All stages of a curriculum (stage dropdown lets you switch)
+python -m nuscenes_pipeline.visualization.eval_sample_visualizer \
+    --curriculum_root output/curriculum_v2_exp/B0__seed0 \
+    --val_subset_dir  sft_dataset/eval_subset_200 \
+    --port 6061
+```
+
+Open `http://<server-ip>:6061` in a browser. Sample selection mirrors
+the eval CLI's `--sanity_print_n N` (first 2 grounded samples per
+category by default → 20 samples per stage). Use `--samples_per_cat N`
+to surface more.
+
+---
+
 ## Resize Factor Guide
 
 | Module | Recommended | Reason |
@@ -1296,3 +1531,19 @@ The dashboard renders the 6-view panorama with question/answer bounding boxes (g
 | Traffic Analysis (1B) | `1` | Full resolution needed for detecting small traffic signals |
 | Question Selector (2) | `2` | Template validation does not require fine-grained detail |
 | Answer Generator (3) | `2` | Answer quality is driven by reasoning, not pixel-level detail |
+
+---
+
+## Supporting Documentation
+
+Project-root markdown documents covering the curriculum-v2 work in
+depth (cross-linked from §13 and §14):
+
+| Document | Purpose |
+|---|---|
+| `loss_system.md` | As-built reference for the 6-term composite loss currently in `composite_loss.py`. Includes per-term spec with code snippets, mask construction, aggregation flow, per-component logging table, numerical-correctness checklist. |
+| `loss_improvement_design_v3.md` | Design rationale for the composite loss. Frozen-loss invariant, per-term motivation, R-VLM / KLAL references, phased rollout. |
+| `curriculum_v2_loss.md` | Narrative explanation of the loss with stepped code excerpts (superseded by `loss_system.md` for as-built reference; kept for explanatory context). |
+| `curriculum_v2_ablation_experiments.md` | Authoritative spec for the 16-run ablation matrix. Knob semantics, composition rules, eval protocol, headline metrics, output layout, deferred Appendix A (difficulty-weighted mixture). |
+| `Mixed-train-implementation-issue.md` | Postmortem for the per-category-uniform sampler fix. Spec/implementation mismatch root cause, 12-config validation results, impact on pre-fix mixed-mode adapters. |
+| `curriculum_pipeline_analysis.md` | Architecture analysis of the v1 sequential curriculum. Useful background context for understanding what v2 changes. |
