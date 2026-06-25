@@ -27,6 +27,25 @@ from typing import Dict, List, Tuple
 
 STAGE_DIR_RE = re.compile(r"stage_(\d+)_([A-Za-z]+)$")
 
+# Canonical curriculum order (matches split_sft_by_category.py:CURRICULUM_ORDER
+# and the `eval_categories` field in curriculum_v{1,2}.yaml). Columns in the
+# report are placed in this order; any unknown categories are appended
+# alphabetically at the end so a future category rename / addition still shows
+# up rather than getting silently dropped.
+CURRICULUM_ORDER = [
+    "OBS", "IDN", "AAS", "SRO", "TSS",
+    "RML", "DRA", "RWP", "ESC", "CHR",
+]
+
+
+def _order_by_curriculum(cats):
+    """Return `cats` sorted as: known curriculum order first, unknown
+    categories appended alphabetically."""
+    cat_set = set(cats)
+    known = [c for c in CURRICULUM_ORDER if c in cat_set]
+    unknown = sorted(cat_set - set(CURRICULUM_ORDER))
+    return known + unknown
+
 
 def discover_reports(output_root: str) -> List[Tuple[int, str, dict]]:
     """Return [(stage_idx, stage_name, report_dict), ...] sorted by stage idx."""
@@ -53,7 +72,17 @@ def collect_categories(reports) -> List[str]:
     cats = set()
     for _, _, r in reports:
         cats.update(r.get("metrics", {}).keys())
-    return sorted(cats)
+    return _order_by_curriculum(cats)
+
+
+def _primary_acc(metric_entry: dict):
+    """Pick the per-category primary accuracy. v2 schema (md §7) uses
+    `answer_acc`; v1 used `acc`. Prefer v2 when both are present."""
+    if not isinstance(metric_entry, dict):
+        return None
+    if "answer_acc" in metric_entry:
+        return metric_entry["answer_acc"]
+    return metric_entry.get("acc")
 
 
 def build_matrix(reports, categories) -> List[Dict]:
@@ -62,9 +91,12 @@ def build_matrix(reports, categories) -> List[Dict]:
         metrics = r.get("metrics", {})
         row = {"stage_idx": idx, "stage_name": name}
         for cat in categories:
-            row[cat] = metrics.get(cat, {}).get("acc")
-        # Use stored macro_acc if present, else recompute.
-        macro = r.get("macro_acc")
+            row[cat] = _primary_acc(metrics.get(cat, {}))
+        # Use stored macro if present, else recompute. v2 emits
+        # `macro_answer_acc`; v1 emitted `macro_acc`.
+        macro = r.get("macro_answer_acc")
+        if macro is None:
+            macro = r.get("macro_acc")
         if macro is None:
             present = [row[c] for c in categories if row[c] is not None]
             macro = sum(present) / len(present) if present else None
