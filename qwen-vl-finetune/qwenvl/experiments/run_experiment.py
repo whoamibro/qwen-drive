@@ -385,6 +385,13 @@ def _train_args_for_gf_er(
         args += ["--grounding_floor", str(cfg.grounding_floor)]
         if global_grounded_paths:
             args += ["--global_grounded_data_paths", ",".join(global_grounded_paths)]
+        # T3 — view-stratified GF (only meaningful when GF is on).
+        if cfg.view_stratified:
+            args += [
+                "--view_stratified", "True",
+                "--view_stratified_min_bucket", str(cfg.view_stratified_min_bucket),
+                "--view_stratified_view_cap", str(cfg.view_stratified_view_cap),
+            ]
     if cfg.replay is not None:
         if not prior_data_paths:
             # Spec §2.3 — first sequential stage gets no replay. We do not

@@ -101,6 +101,25 @@ class ExpDataArguments(v2.DataArguments):
                           "Used to build the GLOBAL_GROUNDED pool per spec §2.2 "
                           "(pool: global) when grounding_floor > 0."},
     )
+    # T3 — view-stratified grounding floor.
+    view_stratified: bool = field(
+        default=False,
+        metadata={"help": "T3: stratify the GF top-up pool per image_idx (1..6). "
+                          "Reuses per-category-uniform two-stage sampler pattern, "
+                          "keyed on view. Default off."},
+    )
+    view_stratified_min_bucket: int = field(
+        default=50,
+        metadata={"help": "T3: drop (view, cat) buckets smaller than this so a "
+                          "handful of rear-view samples can't be sampled hundreds "
+                          "of times per epoch."},
+    )
+    view_stratified_view_cap: float = field(
+        default=2.0,
+        metadata={"help": "T3: cap any view's GF selection probability at cap/6. "
+                          "Excess re-routes to uncapped views; falls back to "
+                          "uniform-among-populated when cap can't be respected."},
+    )
     # Mixed-mode knobs
     mode_mixed: bool = field(default=False)
     mixed_category_data_paths: str = field(
@@ -337,6 +356,27 @@ def _build_concat_dataset_and_sampler(
         max_assistant_tokens=data_args.max_assistant_tokens,
     )
 
+    # T3 — when view-stratified GF is on, derive per-sample view sets from the
+    # already-loaded global_grounded samples. Iteration order MUST match the
+    # combined-JSON GG block (i.e. concat of global_grounded_per_cat[*].samples
+    # in the given order) so absolute indices line up with what
+    # _materialize_combined_json writes.
+    gg_per_sample_views: Optional[List[List[int]]] = None
+    if data_args.view_stratified and target_floor is not None and global_grounded_per_cat:
+        gg_per_sample_views = []
+        for _, samples in global_grounded_per_cat:
+            for s in samples:
+                vs: List[int] = []
+                try:
+                    obj = json.loads(s["conversations"][2]["value"])
+                    for g in obj.get("grounding") or []:
+                        v = g.get("image_idx")
+                        if isinstance(v, int) and 1 <= v <= 6 and v not in vs:
+                            vs.append(v)
+                except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                    pass
+                gg_per_sample_views.append(vs)
+
     sampler, plan = build_sampler(
         current_per_cat=[(c, len(s)) for c, s in current_per_cat],
         prior_per_cat=[(c, len(s)) for c, s in prior_per_cat],
@@ -345,6 +385,10 @@ def _build_concat_dataset_and_sampler(
         replay_fraction=p_replay,
         num_training_samples=num_training_samples,
         seed=seed,
+        global_grounded_per_sample_views=gg_per_sample_views,
+        view_stratified=data_args.view_stratified,
+        view_stratified_min_bucket=data_args.view_stratified_min_bucket,
+        view_stratified_view_cap=data_args.view_stratified_view_cap,
     )
     rank0_print(
         f"[experiments] PoolPlan: |CURRENT|={plan.n_current} "
@@ -369,6 +413,18 @@ def _build_concat_dataset_and_sampler(
             "p_replay": p_replay,
             "target_floor": target_floor,
         }
+        if plan.stratified_gf:
+            plan_dump["global_grounded_view_stratified"] = {
+                "min_bucket": data_args.view_stratified_min_bucket,
+                "view_cap":   data_args.view_stratified_view_cap,
+                "view_weights": {str(v): w for v, w in plan.global_grounded_view_weights.items()},
+                "buckets": [{"view": b.view, "cat": b.cat, "n": b.n}
+                            for b in plan.global_grounded_view_buckets],
+                "dropped_below_min_bucket": [
+                    {"view": v, "cat": c, "n": n}
+                    for v, c, n in plan.global_grounded_dropped_buckets
+                ],
+            }
         plan_path = os.path.join(training_args.output_dir, "sampler_plan.json")
         with open(plan_path, "w") as f:
             json.dump(plan_dump, f, indent=2)

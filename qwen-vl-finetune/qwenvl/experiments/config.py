@@ -105,6 +105,12 @@ class ExpConfig:
     # afterward to do the eval pass and produce summary.json.
     skip_eval: bool = False
 
+    # T3 — view-stratified grounding-floor sampling. Only meaningful when
+    # grounding_floor is enabled.
+    view_stratified: bool = False
+    view_stratified_min_bucket: int = 50
+    view_stratified_view_cap: float = 2.0
+
     # Frozen loss config — surfaced in the manifest for reproducibility.
     # These values mirror curriculum_v2.yaml:loss and are NEVER varied.
     # Updating them in train_nuscenes_qwen3vl_v2.py without updating here
@@ -283,6 +289,23 @@ def build_argparser() -> argparse.ArgumentParser:
              "summary.json. Run `qwenvl.experiments.eval_run --run_dir <...>` "
              "afterward to do the eval pass separately.",
     )
+    # T3 — view-stratified GF (load-bearing: caps prevent sparse-view overfit
+    # from polluting the data-only-vs-T2 gating decision).
+    p.add_argument(
+        "--view_stratified", action="store_true",
+        help="T3: stratify the GF top-up pool per view (image_idx 1..6) "
+             "instead of per category only. No effect if --grounding_floor is off.",
+    )
+    p.add_argument(
+        "--view_stratified_min_bucket", default=50, type=int,
+        help="T3: drop (view, cat) buckets smaller than this so sparse buckets "
+             "can't be sampled hundreds of times per epoch. Default 50.",
+    )
+    p.add_argument(
+        "--view_stratified_view_cap", default=2.0, type=float,
+        help="T3: cap any view's GF selection probability at cap/6. Default 2.0 "
+             "(= 33%% per view ceiling).",
+    )
     return p
 
 
@@ -309,4 +332,7 @@ def parse_cli(argv=None) -> ExpConfig:
         max_steps=args.max_steps,
         dry_run=args.dry_run,
         skip_eval=args.skip_eval,
+        view_stratified=args.view_stratified,
+        view_stratified_min_bucket=args.view_stratified_min_bucket,
+        view_stratified_view_cap=args.view_stratified_view_cap,
     )
