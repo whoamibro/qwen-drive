@@ -141,7 +141,11 @@ _FIRST_BULLET_RE = re.compile(r'\s*\n?\s*-\s+', re.MULTILINE)
 # Bbox extraction + text cleanup
 # ---------------------------------------------------------------------------
 
-def extract_grounding(text: str, image_paths: list[str]) -> tuple[list[dict], str]:
+def extract_grounding(
+    text: str,
+    image_paths: list[str],
+    deterministic_order: bool = False,
+) -> tuple[list[dict], str]:
     """Extract bbox-referenced objects from text into a grounding list and return
     the text with bbox parentheticals stripped.
 
@@ -149,12 +153,22 @@ def extract_grounding(text: str, image_paths: list[str]) -> tuple[list[dict], st
     dimensions of the referenced source image (looked up via PIL), so the
     `ref` field uses Qwen-VL's native grounding token convention.
 
+    When `deterministic_order=True`, the grounding list is sorted by the canonical
+    key `(image_idx asc, area desc, x1 asc)` after extraction. Note: x1 is the
+    [0,1000]-normalized coordinate; for rear views (any view with horizontal flip
+    upstream) this is in the post-flip coord space. The sort is deterministic
+    regardless of orientation — this comment exists to prevent confusion when
+    cross-referencing raw pixel x1.
+
     Returns: (grounding_list, cleaned_text)
     """
     grounding = []
     seen = set()
 
-    # Collect all labeled bboxes first (preserves label)
+    # Collect all labeled bboxes first (preserves label).
+    # `sort_meta` holds the parallel canonical-sort key per entry, so we can
+    # sort without re-parsing the rendered `ref` strings.
+    sort_meta: list[tuple[int, int, int]] = []
     for m in _BBOX_LABELED_RE.finditer(text):
         label = m.group(1)
         img_idx = int(m.group(2))
@@ -173,6 +187,12 @@ def extract_grounding(text: str, image_paths: list[str]) -> tuple[list[dict], st
             "camera": camera,
             "ref": _format_ref(label, x1n, y1n, x2n, y2n),
         })
+        area_n = max(0, x2n - x1n) * max(0, y2n - y1n)
+        sort_meta.append((img_idx, -area_n, x1n))
+
+    if deterministic_order and len(grounding) >= 2:
+        order = sorted(range(len(grounding)), key=lambda i: sort_meta[i])
+        grounding = [grounding[i] for i in order]
 
     # Replace "label (Image N (CamName) bbox[...])" with just "label"
     cleaned = _BBOX_LABELED_RE.sub(r'\1', text)
@@ -225,14 +245,18 @@ def extract_answer_and_reasoning(text: str) -> tuple[str, str, str]:
 # Per-sample conversion
 # ---------------------------------------------------------------------------
 
-def convert_gpt_value(value: str, image_paths: list[str]) -> tuple[str, dict]:
+def convert_gpt_value(
+    value: str,
+    image_paths: list[str],
+    deterministic_order: bool = False,
+) -> tuple[str, dict]:
     """Convert one gpt turn's value string.
 
     Returns: (new_value_json_string, per_sample_stats)
     """
     stats = {"grounding_count": 0, "heuristic_used": None}
 
-    grounding, cleaned = extract_grounding(value, image_paths)
+    grounding, cleaned = extract_grounding(value, image_paths, deterministic_order=deterministic_order)
     stats["grounding_count"] = len(grounding)
 
     answer, reasoning, heuristic = extract_answer_and_reasoning(cleaned)
@@ -247,7 +271,7 @@ def convert_gpt_value(value: str, image_paths: list[str]) -> tuple[str, dict]:
     return new_value, stats
 
 
-def convert_sample(sample: dict) -> tuple[dict, dict]:
+def convert_sample(sample: dict, deterministic_order: bool = False) -> tuple[dict, dict]:
     """Convert a single SFT sample to Qwen3-VL unified-JSON format.
 
     The system turn (if present) is PRESERVED as its own turn — our training
@@ -283,7 +307,7 @@ def convert_sample(sample: dict) -> tuple[dict, dict]:
             continue
 
         if role == "gpt":
-            new_value, turn_stats = convert_gpt_value(value, image_paths)
+            new_value, turn_stats = convert_gpt_value(value, image_paths, deterministic_order=deterministic_order)
             new_convs.append({"from": "gpt", "value": new_value})
             per_sample_stats["gpt_turns"] += 1
             per_sample_stats["grounding_count"] += turn_stats["grounding_count"]
@@ -314,13 +338,27 @@ def main():
                         help="Report stats without writing output file")
     parser.add_argument("--force", action="store_true",
                         help="Skip idempotency check and overwrite existing output")
+    parser.add_argument("--deterministic_box_order", action="store_true",
+                        help="T0: sort grounding boxes by canonical key "
+                             "(image_idx asc, area desc, x1 asc) so the model "
+                             "learns a predictable order instead of the "
+                             "teacher's arbitrary regex-match order.")
     args = parser.parse_args()
 
     out_dir = os.path.dirname(os.path.abspath(args.output)) or "."
     marker_path = os.path.join(out_dir, ".format_qwen3vl")
+    sort_marker_path = os.path.join(out_dir, ".format_qwen3vl_sorted")
     if os.path.exists(marker_path) and os.path.exists(args.output) and not args.force and not args.dry_run:
-        print(f"ERROR: Output directory already has a Qwen3-VL-format marker at {marker_path}")
-        print(f"  A previous run already produced {args.output}. Pass --force to overwrite.")
+        prev_sorted = os.path.exists(sort_marker_path)
+        if prev_sorted == args.deterministic_box_order:
+            print(f"ERROR: Output directory already has a Qwen3-VL-format marker at {marker_path}")
+            print(f"  A previous run already produced {args.output} "
+                  f"(deterministic_box_order={prev_sorted}). Pass --force to overwrite.")
+            return
+        # Order flag toggled vs prior run: warn loudly but require --force to proceed.
+        print(f"ERROR: Existing output {args.output} was produced with "
+              f"deterministic_box_order={prev_sorted}, but this run requests "
+              f"{args.deterministic_box_order}. Pass --force to overwrite.")
         return
 
     print(f"Loading {args.input}...")
@@ -339,7 +377,7 @@ def main():
 
     new_data = []
     for sample in data:
-        new_sample, s = convert_sample(sample)
+        new_sample, s = convert_sample(sample, deterministic_order=args.deterministic_box_order)
         new_data.append(new_sample)
         stats["total"] += 1
         if s["system_preserved"]:
@@ -375,9 +413,20 @@ def main():
     with open(args.output, "w") as f:
         json.dump(new_data, f, ensure_ascii=False)
     with open(marker_path, "w") as f:
-        f.write(f"Qwen3-VL unified-JSON format written by convert_to_qwen3vl_format.py\n")
-    print(f"  Saved: {args.output}")
-    print(f"  Marker: {marker_path}")
+        f.write("Qwen3-VL unified-JSON format written by convert_to_qwen3vl_format.py\n")
+        f.write(f"deterministic_box_order={args.deterministic_box_order}\n")
+    if args.deterministic_box_order:
+        with open(sort_marker_path, "w") as f:
+            f.write("Grounding boxes sorted by canonical key "
+                    "(image_idx asc, area desc, x1 asc) at convert time.\n")
+        print(f"  Saved: {args.output}")
+        print(f"  Markers: {marker_path}, {sort_marker_path}")
+    else:
+        # If toggling back to unsorted, remove the sort marker so state is consistent.
+        if os.path.exists(sort_marker_path):
+            os.remove(sort_marker_path)
+        print(f"  Saved: {args.output}")
+        print(f"  Marker: {marker_path}")
 
 
 if __name__ == "__main__":
