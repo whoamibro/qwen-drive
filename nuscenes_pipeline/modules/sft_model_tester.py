@@ -659,6 +659,38 @@ def _match_pred_to_gt(pred_entries, gt_entries):
     return matches, n_spurious
 
 
+def _match_by_label_only(pred_entries, gt_entries):
+    """Pair GT and PRED by normalized label only (ignoring image_idx), greedy
+    on IoU. Used ONLY to build T1's `view_confusion` so view errors on emitted
+    boxes are visible. Distinct from `_match_pred_to_gt`, which requires
+    matching view — that one drives recall/missing/spurious, this one drives
+    confusion. Returns [(gt_idx, pred_idx)] pairs (only successful matches).
+    """
+    from collections import defaultdict
+
+    def norm(s):
+        return (s or "").strip().lower()
+
+    pred_by_label = defaultdict(list)
+    for pi, p in enumerate(pred_entries):
+        if p["box"] is None:
+            continue
+        pred_by_label[norm(p["label"])].append(pi)
+
+    pairs = []
+    used = set()
+    for gi, g in enumerate(gt_entries):
+        if g.get("box") is None:
+            continue
+        cands = [pi for pi in pred_by_label.get(norm(g["label"]), []) if pi not in used]
+        if not cands:
+            continue
+        best_pi = max(cands, key=lambda pi: _iou_xyxy(pred_entries[pi]["box"], g["box"]))
+        used.add(best_pi)
+        pairs.append((gi, best_pi))
+    return pairs
+
+
 _SANITY_REASONING_RE = re.compile(r'"reasoning"\s*:\s*"((?:[^"\\]|\\.)*)"', re.DOTALL)
 _SANITY_ANSWER_RE    = re.compile(r'"answer"\s*:\s*"((?:[^"\\]|\\.)*)"',    re.DOTALL)
 
@@ -822,6 +854,23 @@ def run_per_category_eval_v2(args):
         "iou_threshold": iou_threshold,
         "metrics": {},
     }
+    if getattr(args, "report_completeness", True):
+        report["field_meaning"] = {
+            "per_view_recall":  ("OMISSION-side metric: of GT boxes in view v, fraction "
+                                 "matched at (image_idx, label) with IoU >= threshold. "
+                                 "Denominator includes views the model never emitted a box for."),
+            "view_confusion":   ("VIEW-ERROR on EMITTED boxes only: count[gt_view-1][pred_view-1] "
+                                 "over GT-PRED pairs matched by LABEL across all views. Says "
+                                 "nothing about boxes the model failed to emit (those live in "
+                                 "per_view_recall). Diagonal mass = correct view; off-diagonal "
+                                 "= view confusion (e.g. front-bias / adjacent-view mixing)."),
+            "n_missing_boxes":  ("OMISSION scalar: mean (per sample with GT grounding) count of "
+                                 "GT boxes with no IoU-threshold match."),
+            "n_spurious_boxes": ("HALLUCINATION scalar: mean (per sample with GT grounding) "
+                                 "count of pred boxes not paired to any GT under (image_idx, label)."),
+            "referring_completeness": ("Per-sample matched_at_threshold / n_gt, averaged across "
+                                 "samples with GT grounding. 1.0 = perfect recall on this sample."),
+        }
     if is_partial_worker:
         report["sample_stride"] = sample_stride
         report["sample_offset"] = sample_offset
@@ -851,6 +900,12 @@ def run_per_category_eval_v2(args):
         spurious_pred_boxes = 0
         sanity_printed = 0
         per_sample = []
+        # T1 — completeness columns (active when args.report_completeness)
+        per_view_gt_count      = [0] * 6   # GT boxes per view (denominator of per_view_recall)
+        per_view_matched_count = [0] * 6   # matched at iou_threshold AND view_ok per view (numerator)
+        view_confusion         = [[0] * 6 for _ in range(6)]  # gt_view x pred_view, label-only matches
+        ref_completeness_sample_sum = 0.0  # per-sample (matched_thr / n_gt), summed
+        n_missing_boxes_sum         = 0    # total GT boxes with no IoU-thr match
 
         slice_tag = (
             f" (worker stride={sample_stride} offset={sample_offset}; "
@@ -930,6 +985,37 @@ def run_per_category_eval_v2(args):
                 "n_spurious": n_spur,
             })
 
+            # T1 — completeness / per-view accumulation.
+            # Run for every grounded sample regardless of `args.report_completeness`
+            # so the per-sample dump can carry these later; aggregation into report
+            # is the only thing gated by the flag.
+            if has_gt_grounding:
+                for g in gt_entries:
+                    v = g.get("image_idx")
+                    if isinstance(v, int) and 1 <= v <= 6:
+                        per_view_gt_count[v - 1] += 1
+                n_matched_thr = 0
+                for mr in sample_grounding:
+                    if not mr.get("iou_ok"):
+                        continue
+                    n_matched_thr += 1
+                    gv = mr["gt"].get("image_idx")
+                    if isinstance(gv, int) and 1 <= gv <= 6:
+                        per_view_matched_count[gv - 1] += 1
+                ref_completeness_sample_sum += n_matched_thr / max(len(gt_entries), 1)
+                n_missing_boxes_sum += len(gt_entries) - n_matched_thr
+
+                # view_confusion uses a LABEL-ONLY pairing so view errors on
+                # emitted boxes are visible. The primary matcher above keys on
+                # (view, label) and would force a diagonal — that's why we run
+                # a second pass here.
+                for gi, pi in _match_by_label_only(pred_entries, gt_entries):
+                    gv = gt_entries[gi].get("image_idx")
+                    pv = pred_entries[pi].get("image_idx")
+                    if (isinstance(gv, int) and 1 <= gv <= 6
+                            and isinstance(pv, int) and 1 <= pv <= 6):
+                        view_confusion[gv - 1][pv - 1] += 1
+
             # Sanity print first N grounded samples per category.
             # Mirrors the visualizer's info density (grounding + reasoning
             # + answer) so log scanning has the same affordances.
@@ -1004,6 +1090,28 @@ def run_per_category_eval_v2(args):
             "parse_rate": parse_rate,
             "spurious_pred_boxes": spurious_pred_boxes,
         }
+        if getattr(args, "report_completeness", True):
+            # referring_completeness is undefined on samples with no GT grounding
+            # (0/0), so its denominator is n_grounded. n_missing and n_spurious
+            # are symmetric — empty-GT samples contribute 0 missing and
+            # potentially-nonzero spurious — so their denominator is n_total.
+            referring_completeness = (
+                ref_completeness_sample_sum / n_grounded if n_grounded > 0 else None
+            )
+            n_missing_boxes_mean  = n_missing_boxes_sum / max(n_total, 1)
+            n_spurious_boxes_mean = spurious_pred_boxes / max(n_total, 1)
+            per_view_recall = [
+                (per_view_matched_count[v] / per_view_gt_count[v]) if per_view_gt_count[v] else None
+                for v in range(6)
+            ]
+            report["metrics"][cat].update({
+                "referring_completeness": referring_completeness,
+                "n_missing_boxes":  n_missing_boxes_mean,
+                "n_spurious_boxes": n_spurious_boxes_mean,
+                "per_view_recall":  per_view_recall,
+                "per_view_gt_count": per_view_gt_count,
+                "view_confusion":   view_confusion,
+            })
         cat_predictions[cat] = per_sample
         print(
             f"[{cat}] done: answer_acc={answer_acc:.3f}  "
@@ -1107,6 +1215,12 @@ def main():
                         help="Suffix appended to eval_report.json / eval_predictions.json "
                              "filenames (e.g. '_worker3'). Used by the 8-GPU single-stage "
                              "wrapper so per-worker outputs don't clobber each other.")
+    parser.add_argument('--report_completeness',
+                        default=True,
+                        action=argparse.BooleanOptionalAction,
+                        help="T1: emit referring_completeness, n_missing/spurious_boxes, "
+                             "per_view_recall, view_confusion in the v2 report. "
+                             "Use --no-report_completeness to suppress.")
 
     args = parser.parse_args()
 
