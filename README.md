@@ -410,6 +410,35 @@ Log files saved to `{log_dir}/`:
 - `qa_gen_stage2_{timestamp}.log` — execution summary
 - `failed_qa_gen_indices_{timestamp}.txt` — indices that failed (for retry)
 
+### Thinking-model variant
+
+For runs that should use `Qwen/Qwen3-VL-235B-A22B-Thinking` instead of the default Instruct model, use the dedicated sibling script `run_answer_generator_thinking.sh`. It mirrors the Instruct script's positional arguments but switches the model name, raises `--max_new_tokens` to `32768` to accommodate the `<think>...</think>` prefix, and writes to a separate output namespace so it never clobbers the Instruct baseline.
+
+vLLM must be launched with the matching reasoning parser so the JSON-only payload arrives in `message.content` (the chain-of-thought is routed to `message.reasoning_content`):
+
+```bash
+vllm serve Qwen/Qwen3-VL-235B-A22B-Thinking \
+    --tensor-parallel-size 8 \
+    --reasoning-parser qwen3 \
+    --max-model-len 65536
+```
+
+Invocation matches the Instruct script's signature:
+
+```bash
+bash nuscenes_pipeline/scripts/run_answer_generator_thinking.sh 0 6018 all 8 from_stage1
+```
+
+Output directories used by the Thinking variant:
+
+| Path | Description |
+|------|-------------|
+| `qa_results_thinking/` | QA pair result files (same schema as `qa_results/`) |
+| `answer_generator_thinking_logs/` | Execution logs |
+| `prior_disagreements_thinking/` | Prior-disagreement traces |
+
+Post-processing (`transform_obj_to_bbox`, `prepare_sft_dataset`, etc.) needs `--input_dir qa_results_thinking` (or a rename) to consume these outputs.
+
 ---
 
 ## Package Structure
