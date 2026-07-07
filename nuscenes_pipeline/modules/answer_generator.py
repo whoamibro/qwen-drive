@@ -595,6 +595,14 @@ def parse_json_response(response: str) -> Optional[object]:
     """
     Parse JSON from the model response. Handles both dict and list responses.
     """
+    # Thinking models emit chain-of-thought before the final payload, closed by
+    # </think>. The thinking text routinely contains incidental JSON fragments
+    # (lists, schema sketches) that must never be mistaken for the answer, so
+    # only the text after the LAST </think> is parsed. Instruct responses have
+    # no </think> and pass through unchanged.
+    if '</think>' in response:
+        response = response.rsplit('</think>', 1)[-1]
+
     # Try to parse the entire response as JSON
     try:
         return json.loads(response.strip())
@@ -615,6 +623,24 @@ def parse_json_response(response: str) -> Optional[object]:
             except json.JSONDecodeError:
                 continue
 
+    # Try to find a JSON object BEFORE trying arrays: the expected payload is
+    # always an object, while stray arrays (e.g. inside a truncated thinking
+    # trace that never reached </think>) are far more likely to be noise.
+    brace_count = 0
+    start_idx = None
+    for i, char in enumerate(response):
+        if char == '{':
+            if brace_count == 0:
+                start_idx = i
+            brace_count += 1
+        elif char == '}':
+            brace_count -= 1
+            if brace_count == 0 and start_idx is not None:
+                try:
+                    return json.loads(response[start_idx:i+1])
+                except json.JSONDecodeError:
+                    start_idx = None
+
     # Try to find a JSON array
     bracket_count = 0
     start_idx = None
@@ -626,22 +652,6 @@ def parse_json_response(response: str) -> Optional[object]:
         elif char == ']':
             bracket_count -= 1
             if bracket_count == 0 and start_idx is not None:
-                try:
-                    return json.loads(response[start_idx:i+1])
-                except json.JSONDecodeError:
-                    start_idx = None
-
-    # Try to find a JSON object
-    brace_count = 0
-    start_idx = None
-    for i, char in enumerate(response):
-        if char == '{':
-            if brace_count == 0:
-                start_idx = i
-            brace_count += 1
-        elif char == '}':
-            brace_count -= 1
-            if brace_count == 0 and start_idx is not None:
                 try:
                     return json.loads(response[start_idx:i+1])
                 except json.JSONDecodeError:
