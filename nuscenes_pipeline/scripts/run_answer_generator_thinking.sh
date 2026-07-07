@@ -35,6 +35,7 @@ CATEGORY=${3:-"all"}
 NUM_WORKERS=${4:-8}
 MODE=${5:-"range"}         # "range" (default) or "from_stage1"
 ANSWER_MODE=${6:-"a_r"}    # "a_r" (default, answer-first) or "r_a" (reasoning-first)
+RESUME=${7:-""}            # "resume" to skip samples with existing results
 
 # Thinking-variant overrides
 MODEL_NAME="Qwen/Qwen3-VL-235B-A22B-Thinking"
@@ -77,6 +78,10 @@ if [ "$MODE" = "from_stage1" ]; then
     SAMPLE_ARGS="--from_stage1"
 else
     SAMPLE_ARGS="--start_idx $START_IDX --end_idx $END_IDX"
+fi
+if [ "$RESUME" = "resume" ]; then
+    SAMPLE_ARGS="$SAMPLE_ARGS --skip_existing"
+    echo "Resume mode: samples with existing results in $OUTPUT_DIR will be skipped"
 fi
 
 # Run the module with Thinking-variant overrides

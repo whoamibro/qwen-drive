@@ -2321,6 +2321,11 @@ def main():
                         help="Auto-discover sample indices from Stage 1 output files "
                              "instead of using start_idx/end_idx range. "
                              "Processes only samples that have applicable_questions results.")
+    parser.add_argument("--skip_existing", action="store_true",
+                        help="Skip samples whose sample_{idx}_qa_results.json already "
+                             "exists in output_dir (resume an interrupted run). "
+                             "A sample writes its output file only on completion, so "
+                             "partially processed samples are safely redone.")
 
     # Category selection
     parser.add_argument(
@@ -2373,6 +2378,21 @@ def main():
             sys.exit(1)
     else:
         sample_indices = list(range(args.start_idx, args.end_idx + 1))
+
+    # Resume support: drop samples that already have a completed output file.
+    if args.skip_existing:
+        before = len(sample_indices)
+        sample_indices = [
+            idx for idx in sample_indices
+            if not os.path.isfile(
+                os.path.join(args.output_dir, f"sample_{idx}_qa_results.json")
+            )
+        ]
+        print(f"--skip_existing: {before - len(sample_indices)} samples already "
+              f"complete in {args.output_dir}/, {len(sample_indices)} remaining")
+        if not sample_indices:
+            print("Nothing to do — all samples already have results.")
+            sys.exit(0)
 
     # Create output directories
     os.makedirs(args.output_dir, exist_ok=True)
