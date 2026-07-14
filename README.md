@@ -24,10 +24,11 @@ A multi-stage VQA pipeline for autonomous driving scene understanding on the nuS
 
 ### Evaluation and inspection
 15. [SFT Model Testing (Qualitative Inference)](#sft-model-testing-qualitative-inference)
-16. [Evaluation & Benchmarks](#evaluation--benchmarks)
-17. [Eval Sample Visualizer (Browser-Based)](#eval-sample-visualizer-browser-based)
-18. [Resize Factor Guide](#resize-factor-guide)
-19. [Supporting Documentation](#supporting-documentation)
+16. [Demo Tester (Per-Scene Frame-by-Frame Inference)](#demo-tester-per-scene-frame-by-frame-inference)
+17. [Evaluation & Benchmarks](#evaluation--benchmarks)
+18. [Eval Sample Visualizer (Browser-Based)](#eval-sample-visualizer-browser-based)
+19. [Resize Factor Guide](#resize-factor-guide)
+20. [Supporting Documentation](#supporting-documentation)
 
 ---
 
@@ -439,6 +440,28 @@ Output directories used by the Thinking variant:
 
 Post-processing (`transform_obj_to_bbox`, `prepare_sft_dataset`, etc.) needs `--input_dir qa_results_thinking` (or a rename) to consume these outputs.
 
+### RL (GRPO) variant
+
+`nuscenes_pipeline/modules/answer_generator_rl.py` (+ `run_answer_generator_rl.sh`) is a separate fork producing RL-training data (spec: `thinking_answer_generator_4_rl_impl.md`). Structural differences from the SFT modules:
+
+- **Tier-banded `think` array** per pair side — the student model's `<think>` learning target. Step-count bands per category (2-4 / 3-5 / 4-6 / 5-8 by tier); exactly 2 steps when the questioned entity is absent.
+- **Fixed key order** `think → reasoning → answer` (no `a_r`/`r_a` switch).
+- **`contrast_status` self-report** (`achieved` / `same_answer` / `skipped`) replaces the must-differ constraint; `same_answer` pairs are emitted honestly and harvested downstream as unpaired QA. Contrast is optional for DRA/RML.
+- **Validation gate + one retry** per template (malformed JSON, think-band violations, missing contrast_status); failed retries are kept with `rl_flags` — no silent drops. `status_mismatch` cross-checks the self-report against the actual answers.
+- **Provenance**: every pair side carries `qa_id` (`s0710_t002_p1_pos` format).
+- **Run report**: `qa_results_rl_thinking/rl_run_report.json` — parse success, per-category band compliance, contrast_status distribution, flag counts.
+
+The grounding contract (`tag_mappings` etc.) is frozen and identical to the SFT modules. Outputs are isolated: `qa_results_rl_thinking/`, `answer_generator_rl_logs/`, `prior_disagreements_rl/`.
+
+```bash
+# Smoke test first (T10): 5 samples x 2 templates per category
+bash nuscenes_pipeline/scripts/run_answer_generator_rl.sh smoke "100,228,304,371,759"
+
+# Full run (same positional signature as the Thinking script, minus ANSWER_MODE;
+# 6th arg "resume" skips samples with existing results)
+bash nuscenes_pipeline/scripts/run_answer_generator_rl.sh 0 6018 all 8 from_stage1 resume
+```
+
 ---
 
 ## Package Structure
@@ -458,8 +481,11 @@ qwen-drive/
       traffic_analysis.py             Stage 1B - Traffic signal state analysis
       question_selector.py            Stage 2  - Template selection from question bank
       answer_generator.py             Stage 3  - Contrastive QA pair generation
+      answer_generator_rl.py          Stage 3 fork - RL (GRPO) training data with think traces
       sft_prompt_builder.py           SFT training prompt construction
       sft_model_tester.py             Qualitative inference test for SFT-trained LoRA model
+      demo_tester.py                  Per-frame scene inference with the SFT model (demo bank / custom question)
+      merge_demo_predictions.py       Merge per-worker demo_tester outputs into predictions.json
     visualization/
       __init__.py
       bev_generator.py                BEV visualization with ego, objects, velocities
@@ -468,7 +494,9 @@ qwen-drive/
       pan_generator.py                6-view panoramic image builder
       pretty_formatting.py            Clean and format JSON result fields
       qa_visualizer.py                Flask web dashboard for QA dataset verification
-      eval_sample_visualizer.py       Flask dashboard for v2 eval outputs — GT vs PRED side-by-side (§17)
+      eval_sample_visualizer.py       Flask dashboard for v2 eval outputs — GT vs PRED side-by-side (§18)
+      demo_scene_video.py             Per-category demo MP4s from demo_tester predictions (§16)
+      driving_command_labeler.py      Flask tool to hand-label GT driving commands (7 classes)
     postprocessing/
       __init__.py
       transform_obj_to_bbox.py        Replace OBJ IDs with 2D bbox descriptions; rear cameras x-flipped
@@ -485,6 +513,9 @@ qwen-drive/
       run_answer_generator.sh         Shell script for Stage 3
       run_postprocessing.sh           Wrapper for the full 5-step post-processing pipeline
       run_sft_model_tester.sh         Shell script for SFT model inference test
+      run_answer_generator_rl.sh      Shell script for the RL (GRPO) Stage 3 fork
+      run_demo_tester_8gpu.sh         8-GPU frame-stride fan-out for demo_tester + auto-merge (§16)
+      run_command_labeler.sh          Launch the driving-command labeling web tool
       show_prompts.py                 Prompt preview (prints system+user prompts without inference)
   qwen-vl-finetune/
     configs/
@@ -649,7 +680,7 @@ python -m nuscenes_pipeline.visualization.pan_generator \
 
 ### make_scene_videos.py
 
-Stitches the per-sample outputs of `pan_generator.py` + `bev_generator.py` into one MP4 video **per nuScenes scene** (vs `make_video.py`'s single combined video). Useful for inspecting model behavior temporally within each scene.
+Stitches the per-sample outputs of `pan_generator.py` + `bev_generator.py` into one MP4 video **per nuScenes scene** (vs `make_video.py`'s single combined video). Useful for inspecting model behavior temporally within each scene. Output files are numbered temporally — scenes are ordered by their earliest sample index and written as `scene_0001.mp4`, `scene_0002.mp4`, … (not named by scene token).
 
 ```bash
 python -m nuscenes_pipeline.visualization.make_scene_videos \
@@ -659,7 +690,17 @@ python -m nuscenes_pipeline.visualization.make_scene_videos \
 
 ### eval_sample_visualizer.py
 
-Flask dashboard for the v2 evaluation outputs (§17). Renders GT vs PRED side-by-side: green / pink box overlays on 6-view images, parsed reasoning and answer fields, per-box IoU + view-OK match table. See [§17](#eval-sample-visualizer-browser-based) for launch commands.
+Flask dashboard for the v2 evaluation outputs (§18). Renders GT vs PRED side-by-side: green / pink box overlays on 6-view images, parsed reasoning and answer fields, per-box IoU + view-OK match table. See [§18](#eval-sample-visualizer-browser-based) for launch commands.
+
+### driving_command_labeler.py
+
+Flask browser tool to hand-label the **ground-truth driving command** per sample. Shows the 3 forward camera views (FL / F / FR) plus a BEV pane, with 7 command classes: `0` Turn left, `1` Turn right, `2` Go straight, `3` Follow lane, `4` Change lane to left, `5` Change lane to right, `6` U-Turn. Click a button or press keys `0`–`6`; each label autosaves and the view auto-advances (re-labeling with a different command overwrites and stays on the sample; Backspace clears). Output is one JSON per scene (`{scene_id, scene_index, sample_labels}`); existing label files in `--output_dir` are reloaded on startup, so labeling resumes across server restarts.
+
+```bash
+# PORT (default 6062) and SPLIT (train | val, default train).
+# SPLIT selects the pkl and writes labels to driving_command_labels_<SPLIT>/
+bash nuscenes_pipeline/scripts/run_command_labeler.sh 6062 train
+```
 
 ---
 
@@ -1242,6 +1283,17 @@ Curriculum-v2 builds on the per-category curriculum (§12) with two additions:
    operates on raw token IDs so box delimiter special tokens aren't
    stripped at decode time.
 
+   Since the T1 completeness work (spec: `v3_loss_completeness_task.md`),
+   each category additionally reports grounding-completeness columns:
+   `referring_completeness`, `n_missing_boxes`, `n_spurious_boxes`,
+   `per_view_recall` (per 6-view slot), `per_view_gt_count`, and a 6×6
+   `view_confusion` matrix. The metrics dict also carries `_raw_*` count
+   fields (matched-box counts, missing-box and completeness sums) — not
+   for human consumption: `eval_single_stage_8gpu.sh` sums them across
+   its 8 workers and re-derives the ratios at merge time. The merge is
+   backward-compatible — worker reports from pre-T1 checkpoints simply
+   omit the completeness columns and the merger skips them.
+
 ### Run the v2 curriculum (10 stages)
 
 ```bash
@@ -1513,6 +1565,41 @@ The `"gt"` turn is only added in `--from_val` mode. Because the format matches t
 
 ---
 
+## Demo Tester (Per-Scene Frame-by-Frame Inference)
+
+`nuscenes_pipeline/modules/demo_tester.py` runs the SFT-trained model on **every frame of one nuScenes scene** — for demo videos and qualitative temporal inspection. `--scene_token` accepts the full 32-char token or the 16-char prefix used in filenames. It reuses the exact prompt/inference path of `sft_model_tester` (system/user prompt builders, 6-view interleave with rear flip, token-ID grounding parse), so predictions are byte-comparable to the training-time distribution.
+
+Two mutually exclusive modes:
+
+- **Mode A** — `--demo_questions_path data/demo_questions.json`: runs the canonical 40-question demo bank (4 questions × 10 categories) on every frame; output groups the 40 answers per frame.
+- **Mode B** — `--q "..."`: runs a single custom question on every frame.
+
+```bash
+# 8-GPU frame-stride fan-out (worker i owns frames with frame_pos % NPROC == i),
+# then auto-merges the per-worker JSONs into a canonical predictions.json
+LORA_PATH=output/curriculum_v2_f3_0618/F3__seed0/ckpt_100 \
+    bash nuscenes_pipeline/scripts/run_demo_tester_8gpu.sh \
+        ff6af17f52c34e9c data/demo_questions.json                              # Mode A
+
+LORA_PATH=... bash nuscenes_pipeline/scripts/run_demo_tester_8gpu.sh \
+        b526c20f7eed49f0 'Is the ego-vehicle safe to change lanes right?'      # Mode B
+```
+
+Single-GPU runs invoke the module directly (`python -m nuscenes_pipeline.modules.demo_tester --scene_token ... --lora_path ...` plus one of the two mode flags). The sharding contract is `--sample_stride` / `--sample_offset`; `merge_demo_predictions.py --worker_dir <dir>` merges the per-worker files — frame_pos values are disjoint across workers so concat + sort is lossless, and header fields (model paths, question set, etc.) are sanity-checked for cross-worker consistency. Output defaults to `demo_test_results/<scene_token[:16]>/`.
+
+### demo_scene_video.py
+
+Assembles a `predictions.json` into **one MP4 per category** (10 for the canonical bank). Each video cycles through the category's questions sequentially, playing each question across every frame of the scene: 6-view panoramic tiles (rear views flipped, same as training) plus a header block with the question, predicted answer, and the first lines of reasoning. Predicted grounding is drawn as pink boxes — coordinates are in Qwen-VL's [0, 1000] normalized space and map straight onto the tiles, no unflip needed.
+
+```bash
+python -m nuscenes_pipeline.visualization.demo_scene_video \
+    --predictions demo_test_results/ff6af17f52c34e9c/predictions.json \
+    --output_dir  demo_test_results/ff6af17f52c34e9c/videos \
+    --framerate 2                    # --only_category <CAT> renders a single video
+```
+
+---
+
 ## Evaluation & Benchmarks
 
 > **Note**: this section documents the original **qualitative inspection workflow** (predict on val
@@ -1647,11 +1734,13 @@ to surface more.
 
 ## Supporting Documentation
 
-Project-root markdown documents covering the curriculum-v2 work in
-depth (cross-linked from §13 and §14):
+Project-root markdown documents covering the curriculum-v2 and
+autolabel-variant work in depth (cross-linked from §6, §13 and §14):
 
 | Document | Purpose |
 |---|---|
+| `v3_loss_completeness_task.md` | Spec for the grounding-completeness work (T1–T3): per-view completeness measurement columns in the v2 eval, per-view presence supervision, view-stratified grounding-floor sampling. Motivating failure case and scope guardrails (referring-grounding only, no detection/set loss). |
+| `thinking_answer_generator_4_rl_impl.md` | Spec for the RL (GRPO) Stage 3 fork (`answer_generator_rl.py`): tier-banded think arrays, `contrast_status` self-report, validation gate + retry, provenance `qa_id`s, run report. |
 | `loss_system.md` | As-built reference for the 6-term composite loss currently in `composite_loss.py`. Includes per-term spec with code snippets, mask construction, aggregation flow, per-component logging table, numerical-correctness checklist. |
 | `loss_improvement_design_v3.md` | Design rationale for the composite loss. Frozen-loss invariant, per-term motivation, R-VLM / KLAL references, phased rollout. |
 | `curriculum_v2_loss.md` | Narrative explanation of the loss with stepped code excerpts (superseded by `loss_system.md` for as-built reference; kept for explanatory context). |
