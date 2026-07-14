@@ -119,7 +119,12 @@ def main():
     vis_by_scene = index_by_scene(args.vis_dir)
     bev_by_scene = index_by_scene(args.bev_dir)
 
-    common_scenes = sorted(set(vis_by_scene) & set(bev_by_scene))
+    common_scenes = set(vis_by_scene) & set(bev_by_scene)
+    # Order scenes by their earliest sample index so scene_0001 is temporally
+    # the first scene in the dataset.
+    common_scenes = sorted(common_scenes,
+                           key=lambda tok: min(set(vis_by_scene[tok]) & set(bev_by_scene[tok]),
+                                               default='9999'))
     print(f"Found {len(common_scenes)} scenes present in both dirs "
           f"(pan only: {len(set(vis_by_scene)-set(bev_by_scene))}, "
           f"bev only: {len(set(bev_by_scene)-set(vis_by_scene))})")
@@ -130,8 +135,9 @@ def main():
     dims = None
     rendered = 0
     skipped = 0
-    for scene_tok in common_scenes:
-        output_path = os.path.join(args.output_dir, f'scene_{scene_tok}.mp4')
+    for scene_num, scene_tok in enumerate(common_scenes, start=1):
+        filename = f'scene_{scene_num:04d}.mp4'
+        output_path = os.path.join(args.output_dir, filename)
         if args.skip_existing and os.path.exists(output_path):
             skipped += 1
             continue
@@ -152,7 +158,7 @@ def main():
 
         render_scene(scene_tok, frames, dims, temp_dir, output_path, args.framerate)
         rendered += 1
-        print(f"  [{rendered}/{len(common_scenes)-skipped}] scene_{scene_tok}.mp4 "
+        print(f"  [{rendered}/{len(common_scenes)-skipped}] {filename} "
               f"({len(frames)} frames)")
 
     if os.path.isdir(temp_dir):
