@@ -1111,6 +1111,12 @@ def run_per_category_eval_v2(args):
                 "per_view_recall":  per_view_recall,
                 "per_view_gt_count": per_view_gt_count,
                 "view_confusion":   view_confusion,
+                # Raw counts so the 8-GPU merger can sum + re-derive ratios
+                # across workers. Not for human consumption — the *_mean /
+                # per_view_recall keys above are. Schema-stable: append-only.
+                "_raw_per_view_matched_count":   per_view_matched_count,
+                "_raw_n_missing_boxes_sum":      n_missing_boxes_sum,
+                "_raw_ref_completeness_sum":     ref_completeness_sample_sum,
             })
         cat_predictions[cat] = per_sample
         print(

@@ -223,6 +223,14 @@ for cat in ordered_cats:
     n_grounded_with_valid_pred = 0
     spurious_pred_boxes = 0
     iou_key = None
+    # T1 — completeness raw accumulators (gated: only fold in if at least one
+    # worker emitted them, so backward-compat with pre-T1 reports holds).
+    has_t1 = False
+    per_view_gt_count      = [0] * 6
+    per_view_matched_count = [0] * 6
+    view_confusion         = [[0] * 6 for _ in range(6)]
+    n_missing_boxes_sum   = 0
+    ref_completeness_sum  = 0.0
     for r in worker_reports:
         m = r.get("metrics", {}).get(cat)
         if m is None: continue
@@ -241,6 +249,17 @@ for cat in ordered_cats:
         if gfv is not None and m["n_grounded"] > 0:
             n_grounded_with_valid_pred += round(gfv * m["n_grounded"])
         spurious_pred_boxes += m.get("spurious_pred_boxes", 0)
+        # T1 raw counts (append-only schema; missing keys mean pre-T1 worker)
+        if "per_view_gt_count" in m and "_raw_per_view_matched_count" in m:
+            has_t1 = True
+            for v in range(6):
+                per_view_gt_count[v]      += m["per_view_gt_count"][v]
+                per_view_matched_count[v] += m["_raw_per_view_matched_count"][v]
+            for i in range(6):
+                for j in range(6):
+                    view_confusion[i][j] += m.get("view_confusion", [[0]*6]*6)[i][j]
+            n_missing_boxes_sum  += m.get("_raw_n_missing_boxes_sum", 0)
+            ref_completeness_sum += m.get("_raw_ref_completeness_sum", 0.0)
 
     if iou_key is None: iou_key = "grounding_acc@0.8"
     merged_metrics[cat] = {
@@ -255,6 +274,20 @@ for cat in ordered_cats:
         "parse_rate": n_parsed_answer / max(n, 1),
         "spurious_pred_boxes": spurious_pred_boxes,
     }
+    if has_t1:
+        merged_metrics[cat].update({
+            "referring_completeness": (ref_completeness_sum / n_grounded) if n_grounded > 0 else None,
+            "n_missing_boxes":  n_missing_boxes_sum  / max(n, 1),
+            "n_spurious_boxes": spurious_pred_boxes  / max(n, 1),
+            "per_view_recall":  [(per_view_matched_count[v] / per_view_gt_count[v])
+                                 if per_view_gt_count[v] else None
+                                 for v in range(6)],
+            "per_view_gt_count": per_view_gt_count,
+            "view_confusion":   view_confusion,
+            "_raw_per_view_matched_count":   per_view_matched_count,
+            "_raw_n_missing_boxes_sum":      n_missing_boxes_sum,
+            "_raw_ref_completeness_sum":     ref_completeness_sum,
+        })
 
 macro = (sum(merged_metrics[c]["answer_acc"] for c in ordered_cats) / len(ordered_cats)
          if ordered_cats else 0.0)
