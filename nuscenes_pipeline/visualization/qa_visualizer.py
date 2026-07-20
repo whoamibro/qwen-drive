@@ -89,8 +89,13 @@ def image_to_base64(img):
     return f"data:image/jpeg;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
 
-def generate_bev(sample, loader, bev_range=50.0):
-    """Generate BEV visualization as base64 PNG. Referencing vqa_test_egocentric.py."""
+def generate_bev(sample, loader, bev_range=50.0, overlay_fn=None):
+    """Generate BEV visualization as base64 PNG. Referencing vqa_test_egocentric.py.
+
+    overlay_fn: optional callback(ax, to_plot) invoked after GT objects are drawn;
+    to_plot maps an ego-FLU [x, y] position to BEV plot coordinates. Used by
+    detection_visualizer.py to overlay detected traffic lights/poles.
+    """
     first_cam = sample.cameras[loader.CAMERA_NAMES[0]]
     ego_pos_global = np.array(first_cam.ego2global_translation[:2])
     ego_quat = first_cam.ego2global_rotation
@@ -202,6 +207,12 @@ def generate_bev(sample, loader, bev_range=50.0):
             ax.text(obj_pos_plot[0], obj_pos_plot[1] + obj_w/2 + 1.2,
                     f"{obj_name}\n{distance:.0f}m|{motion}", fontsize=6, color=color,
                     ha='center', va='bottom', alpha=0.9)
+
+    # Optional overlay (e.g. detected traffic lights/poles in ego FLU coords)
+    if overlay_fn is not None:
+        def to_plot(pos_ego_xy):
+            return R_scene @ (R_ego2global @ np.asarray(pos_ego_xy, dtype=float))
+        overlay_fn(ax, to_plot)
 
     # Coordinate axes
     ax.annotate('', xy=(0,10), xytext=(0,0), arrowprops=dict(arrowstyle='->', color='#55ff55', lw=2), zorder=2)

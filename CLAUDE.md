@@ -27,6 +27,7 @@ Stage 1C  traffic_sign_extraction    ─┘
 | 1A | `nuscenes_pipeline.modules.risk_assessment` | `scripts/run_risk_assessment.sh` |
 | 1B | `nuscenes_pipeline.modules.traffic_signal_analysis` | `scripts/run_traffic_signal_analysis.sh` |
 | 1C | `nuscenes_pipeline.modules.traffic_sign_extraction` | `scripts/run_traffic_sign_extraction.sh` |
+| 1D (standalone) | `nuscenes_pipeline.modules.traffic_light_pole_detection` | `scripts/run_traffic_light_pole_detection.sh` |
 | 2  | `nuscenes_pipeline.modules.question_selector` | `scripts/run_question_selector.sh` |
 | 3  | `nuscenes_pipeline.modules.answer_generator` | `scripts/run_answer_generator.sh` |
 | SFT test | `nuscenes_pipeline.modules.sft_model_tester` | `scripts/run_sft_model_tester.sh` |
@@ -40,6 +41,8 @@ Stage 1C  traffic_sign_extraction    ─┘
 | `risk_assessment_results/` | `*_single_frame.json` |
 | `traffic_signal_analysis_results/` | `*_traffic_signal.json` |
 | `traffic_sign_results/` | `*_sign.json` |
+| `traffic_light_pole_3d_results/` | `{idx:04d}_{sample_token}.json` (3D light bboxes + pole line segments, ego FLU) |
+| `traffic_light_pole_3d_vis/` | `{idx:04d}_{sample_token}.jpg` (with `--visualize`: annotated 6-view + BEV composite) |
 | `qa_outputs/<category>/` or `qa_outputs/all/` | `sample_{idx}_applicable_questions.json`, `sample_{idx}_qa_summary.json`, `sample_{idx}_inference_detailed.json` |
 | `qa_results/` | `sample_{idx}_qa_results.json`, `sample_{idx}_qa_detailed.json` |
 | `sft_dataset/` | `sft_train_no_objlist.json`, `sft_val_no_objlist.json` |

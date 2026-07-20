@@ -9,26 +9,27 @@ A multi-stage VQA pipeline for autonomous driving scene understanding on the nuS
 2. [Prerequisites](#prerequisites)
 3. [Stage 1A: Risk Assessment](#stage-1a-risk-assessment)
 4. [Stage 1B: Traffic Analysis](#stage-1b-traffic-analysis)
-5. [Stage 2: Question Selector](#stage-2-question-selector)
-6. [Stage 3: Answer Generator](#stage-3-answer-generator)
-7. [Package Structure](#package-structure)
-8. [Visualization Tools](#visualization-tools)
-9. [Post-Processing Pipeline](#post-processing-pipeline)
-10. [Full Pipeline Example (End-to-End)](#full-pipeline-example-end-to-end)
+5. [Stage 1D: Traffic Light & Pole 3D Detection](#stage-1d-traffic-light--pole-3d-detection)
+6. [Stage 2: Question Selector](#stage-2-question-selector)
+7. [Stage 3: Answer Generator](#stage-3-answer-generator)
+8. [Package Structure](#package-structure)
+9. [Visualization Tools](#visualization-tools)
+10. [Post-Processing Pipeline](#post-processing-pipeline)
+11. [Full Pipeline Example (End-to-End)](#full-pipeline-example-end-to-end)
 
 ### SFT training
-11. [SFT Training](#sft-training)
-12. [Curriculum Learning (Sequential Multi-Stage SFT)](#curriculum-learning-sequential-multi-stage-sft)
-13. [Curriculum-v2 Training and Evaluation](#curriculum-v2-training-and-evaluation)
-14. [Ablation Experiments Framework](#ablation-experiments-framework)
+12. [SFT Training](#sft-training)
+13. [Curriculum Learning (Sequential Multi-Stage SFT)](#curriculum-learning-sequential-multi-stage-sft)
+14. [Curriculum-v2 Training and Evaluation](#curriculum-v2-training-and-evaluation)
+15. [Ablation Experiments Framework](#ablation-experiments-framework)
 
 ### Evaluation and inspection
-15. [SFT Model Testing (Qualitative Inference)](#sft-model-testing-qualitative-inference)
-16. [Demo Tester (Per-Scene Frame-by-Frame Inference)](#demo-tester-per-scene-frame-by-frame-inference)
-17. [Evaluation & Benchmarks](#evaluation--benchmarks)
-18. [Eval Sample Visualizer (Browser-Based)](#eval-sample-visualizer-browser-based)
-19. [Resize Factor Guide](#resize-factor-guide)
-20. [Supporting Documentation](#supporting-documentation)
+16. [SFT Model Testing (Qualitative Inference)](#sft-model-testing-qualitative-inference)
+17. [Demo Tester (Per-Scene Frame-by-Frame Inference)](#demo-tester-per-scene-frame-by-frame-inference)
+18. [Evaluation & Benchmarks](#evaluation--benchmarks)
+19. [Eval Sample Visualizer (Browser-Based)](#eval-sample-visualizer-browser-based)
+20. [Resize Factor Guide](#resize-factor-guide)
+21. [Supporting Documentation](#supporting-documentation)
 
 ---
 
@@ -45,11 +46,15 @@ Stage 2:  Question Selector     Select applicable question templates from the qu
                           (Stage 2 outputs feed into Stage 3)
                                         |
 Stage 3:  Answer Generator      Generate grounded QA pairs with contrastive answers
+
+Stage 1D: Traffic Light & Pole 3D Detection   (standalone) Per-view VLM detection of
+                                              signal housings + poles, lifted to 3D
 ```
 
 Stages 1A and 1B are independent and can run in parallel.
 Stage 2 requires both Stage 1A and 1B results.
 Stage 3 requires Stage 2 results.
+Stage 1D is a standalone seed-data module — nothing downstream depends on it yet.
 
 ---
 
@@ -208,6 +213,57 @@ Per-sample JSON files saved to `{results_dir}/`:
 - `response`: Model's traffic signal analysis (signal states, orientations, lane governance)
 - `inference_time`: Time taken for the API call
 - `sample_metadata`: Sample index, scene token, camera heading table
+
+---
+
+## Stage 1D: Traffic Light & Pole 3D Detection
+
+Standalone seed-data module (`tlspd`): detects every traffic-signal light housing (2D bbox) and its supporting pole/mast-arm/gantry segments (2D line segments) per camera view, then geometrically lifts them to 3D in the ego FLU frame using camera intrinsics + `sensor2ego` extrinsics.
+
+Key design differences from the other Stage-1 modules:
+- **One API call per camera view** (6 sequential inferences per sample) so pixel grounding is unambiguous and per-request memory stays low.
+- **Rear cameras are NOT flipped** — flipping would corrupt the pixel coordinate space needed for 3D lifting (the visualizers mirror coordinates for display instead).
+- **Input upscaling**: each view is LANCZOS-upscaled before inference (default x2.5 → 4000x2250; `--upscale_size 4000 4000` for an exact square) so small distant signals survive the vision-encoder patch embedding. The Qwen3-VL-235B processor budget (16.78M px) passes these through without server-side downscaling.
+- **Coordinate convention (important)**: Qwen3-VL grounds in a **0-1000 normalized space per axis** and does not honor absolute-pixel instructions (verified by calibration against the served model). The prompt requests 0-1000 coordinates and the parser rescales them to the original 1600x900 space — so stored coordinates are always full-res, and alignment is independent of both the client-side upscale and any server-side resize.
+
+### How to Run
+
+```bash
+# Via shell script (recommended defaults; optional tokens are order-independent)
+bash nuscenes_pipeline/scripts/run_traffic_light_pole_detection.sh [START_IDX] [END_IDX] [NUM_WORKERS] [front_only] [visualize]
+
+# Full val set
+bash nuscenes_pipeline/scripts/run_traffic_light_pole_detection.sh 0 6018 8
+
+# Via Python module
+python -m nuscenes_pipeline.modules.traffic_light_pole_detection \
+    --start_idx 0 --end_idx 6018 --num_workers 8 \
+    --upscale_factor 2.5 \
+    --max_new_tokens 8192 \
+    --results_dir traffic_light_pole_3d_results
+```
+
+### Arguments (beyond the common ones shared with Stage 1A/1B)
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--upscale_factor` | float | `2.0` | Aspect-preserving upscale per side (e.g., `2.5` → 4000x2250). `1` disables |
+| `--upscale_size` | int int | `None` | Exact `W H` input size (e.g., `4000 4000`), overrides `--upscale_factor`. Non-16:9 sizes distort aspect ratio; coordinates still map back correctly, but grounding precision may degrade |
+| `--front_only` | flag | `False` | Only process the 3 front cameras (halves the API calls) |
+| `--max_new_tokens` | int | `8192` | Generation cap per view (headroom for Thinking-model reasoning tokens) |
+| `--visualize` | flag | `False` | Also save an annotated composite JPG per sample (6-view grid + BEV) |
+| `--viz_output_dir` | str | `traffic_light_pole_3d_vis` | Directory for visualization composites |
+
+### Output
+
+One JSON per sample: `traffic_light_pole_3d_results/{idx:04d}_{sample_token}.json`
+
+- `traffic_lights[]`: `id`, `camera`, `bbox_2d` (full-res 1600x900 space), `signal_type`, `orientation`, `num_sections`, `state`, `facing`, and `bbox_3d` = `{center [x,y,z], size [l,w,h], yaw, depth_m, depth_source}` in ego FLU. Depth comes from pinhole geometry using the physical housing size (~0.35 m per lens section; `depth_source: pinhole_height/pinhole_width`), falling back to the model's own estimate (`model_estimate`).
+- `poles[]`: `id`, `camera`, `line_2d`, `segment_type` (`vertical_pole`/`mast_arm`/`gantry`/`span_wire`), `base_on_ground`, `attached_light_ids`, and `line_3d` = `{bottom [x,y,z], top [x,y,z], depth_m, depth_source}`. Vertical poles with visible ground contact are lifted by ray/ground-plane intersection (`ground_plane`); mast arms inherit an attached light's depth (`attached_light`) or use the model estimate.
+- `per_view`: raw model response, parse status, and shown image size per camera (for auditing).
+- `ego2global_rotation/translation`: recorded so downstream consumers can leave the ego frame.
+
+Inspect results interactively with `detection_visualizer.py` (see [Visualization Tools](#visualization-tools)).
 
 ---
 
@@ -482,6 +538,7 @@ qwen-drive/
       question_selector.py            Stage 2  - Template selection from question bank
       answer_generator.py             Stage 3  - Contrastive QA pair generation
       answer_generator_rl.py          Stage 3 fork - RL (GRPO) training data with think traces
+      traffic_light_pole_detection.py Stage 1D - Per-view traffic light + pole detection, lifted to 3D (ego FLU)
       sft_prompt_builder.py           SFT training prompt construction
       sft_model_tester.py             Qualitative inference test for SFT-trained LoRA model
       demo_tester.py                  Per-frame scene inference with the SFT model (demo bank / custom question)
@@ -494,6 +551,8 @@ qwen-drive/
       pan_generator.py                6-view panoramic image builder
       pretty_formatting.py            Clean and format JSON result fields
       qa_visualizer.py                Flask web dashboard for QA dataset verification
+      detection_visualizer.py         Flask dashboard for Stage 1D detections + Stage 1 prior toggles
+      detection_drawing.py            Shared drawing primitives for detection overlays (dashboard + batch composites)
       eval_sample_visualizer.py       Flask dashboard for v2 eval outputs — GT vs PRED side-by-side (§18)
       demo_scene_video.py             Per-category demo MP4s from demo_tester predictions (§16)
       driving_command_labeler.py      Flask tool to hand-label GT driving commands (7 classes)
@@ -514,6 +573,7 @@ qwen-drive/
       run_postprocessing.sh           Wrapper for the full 5-step post-processing pipeline
       run_sft_model_tester.sh         Shell script for SFT model inference test
       run_answer_generator_rl.sh      Shell script for the RL (GRPO) Stage 3 fork
+      run_traffic_light_pole_detection.sh  Shell script for Stage 1D (front_only / visualize tokens)
       run_demo_tester_8gpu.sh         8-GPU frame-stride fan-out for demo_tester + auto-merge (§16)
       run_command_labeler.sh          Launch the driving-command labeling web tool
       show_prompts.py                 Prompt preview (prints system+user prompts without inference)
@@ -668,6 +728,32 @@ python -m nuscenes_pipeline.visualization.qa_visualizer \
 - `r`: jump to a random sample
 
 **Requires:** `flask`, `matplotlib`, `Pillow`
+
+### detection_visualizer.py
+
+Interactive Flask dashboard (based on `qa_visualizer.py`) for verifying Stage 1D traffic light & pole detections against the other Stage-1 prior analyses. Browses by nuScenes `sample_idx` with per-input on/off toggles:
+
+- **TL boxes** — detected 2D bboxes on the 6-view images, colored by state (red/yellow/green/blue=unknown), labeled `id + state + lifted depth`
+- **Poles** — line segments colored by type (white=vertical, magenta=mast arm, orange=gantry) with base markers
+- **Risk / Signal / Sign** — Stage 1A/1B/1C response text panels
+- Plus a 3D detection table (`center`, `size`, `depth_m`, `depth_source`) and the BEV overlaying lifted 3D footprints/pole bases on GT objects
+
+```bash
+python -m nuscenes_pipeline.visualization.detection_visualizer \
+    --pkl_path /path/to/nuscenes.pkl \
+    --port 6061
+```
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--port` / `--host` | int / str | `6061` / `0.0.0.0` | Web server bind |
+| `--pkl_path` | str | env `NUSCENES_PKL_PATH` | nuScenes pickle file |
+| `--detection_dir` | str | `traffic_light_pole_3d_results` | Stage 1D output dir |
+| `--risk_dir` / `--signal_dir` / `--sign_dir` | str | Stage 1A/1B/1C default dirs | Prior-analysis result dirs |
+
+Rear views are displayed flipped (consistent with the other tools); detection coordinates are mirrored automatically before drawing.
+
+The drawing primitives live in `detection_drawing.py`, shared with the Stage 1D `--visualize` batch composites — dashboard renders and batch JPGs are always identical.
 
 ### pan_generator.py
 
