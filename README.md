@@ -9,27 +9,28 @@ A multi-stage VQA pipeline for autonomous driving scene understanding on the nuS
 2. [Prerequisites](#prerequisites)
 3. [Stage 1A: Risk Assessment](#stage-1a-risk-assessment)
 4. [Stage 1B: Traffic Analysis](#stage-1b-traffic-analysis)
-5. [Stage 1D: Traffic Light & Pole 3D Detection](#stage-1d-traffic-light--pole-3d-detection)
-6. [Stage 2: Question Selector](#stage-2-question-selector)
-7. [Stage 3: Answer Generator](#stage-3-answer-generator)
-8. [Package Structure](#package-structure)
-9. [Visualization Tools](#visualization-tools)
-10. [Post-Processing Pipeline](#post-processing-pipeline)
-11. [Full Pipeline Example (End-to-End)](#full-pipeline-example-end-to-end)
+5. [Stage 1C: Traffic Sign Extraction](#stage-1c-traffic-sign-extraction)
+6. [Stage 1D: Traffic Light & Pole 3D Detection](#stage-1d-traffic-light--pole-3d-detection)
+7. [Stage 2: Question Selector](#stage-2-question-selector)
+8. [Stage 3: Answer Generator](#stage-3-answer-generator)
+9. [Package Structure](#package-structure)
+10. [Visualization Tools](#visualization-tools)
+11. [Post-Processing Pipeline](#post-processing-pipeline)
+12. [Full Pipeline Example (End-to-End)](#full-pipeline-example-end-to-end)
 
 ### SFT training
-12. [SFT Training](#sft-training)
-13. [Curriculum Learning (Sequential Multi-Stage SFT)](#curriculum-learning-sequential-multi-stage-sft)
-14. [Curriculum-v2 Training and Evaluation](#curriculum-v2-training-and-evaluation)
-15. [Ablation Experiments Framework](#ablation-experiments-framework)
+13. [SFT Training](#sft-training)
+14. [Curriculum Learning (Sequential Multi-Stage SFT)](#curriculum-learning-sequential-multi-stage-sft)
+15. [Curriculum-v2 Training and Evaluation](#curriculum-v2-training-and-evaluation)
+16. [Ablation Experiments Framework](#ablation-experiments-framework)
 
 ### Evaluation and inspection
-16. [SFT Model Testing (Qualitative Inference)](#sft-model-testing-qualitative-inference)
-17. [Demo Tester (Per-Scene Frame-by-Frame Inference)](#demo-tester-per-scene-frame-by-frame-inference)
-18. [Evaluation & Benchmarks](#evaluation--benchmarks)
-19. [Eval Sample Visualizer (Browser-Based)](#eval-sample-visualizer-browser-based)
-20. [Resize Factor Guide](#resize-factor-guide)
-21. [Supporting Documentation](#supporting-documentation)
+17. [SFT Model Testing (Qualitative Inference)](#sft-model-testing-qualitative-inference)
+18. [Demo Tester (Per-Scene Frame-by-Frame Inference)](#demo-tester-per-scene-frame-by-frame-inference)
+19. [Evaluation & Benchmarks](#evaluation--benchmarks)
+20. [Eval Sample Visualizer (Browser-Based)](#eval-sample-visualizer-browser-based)
+21. [Resize Factor Guide](#resize-factor-guide)
+22. [Supporting Documentation](#supporting-documentation)
 
 ---
 
@@ -38,12 +39,13 @@ A multi-stage VQA pipeline for autonomous driving scene understanding on the nuS
 ```
 Stage 1A: Risk Assessment      Analyze driving risks, hazards, and TTC per sample
 Stage 1B: Traffic Analysis      Identify traffic signal states per sample
+Stage 1C: Traffic Sign Extraction   Extract regulatory/warning/guide signs across 6 views
                                         |
                           (Stage 1A + 1B results feed into Stage 2)
                                         |
 Stage 2:  Question Selector     Select applicable question templates from the question bank
                                         |
-                          (Stage 2 outputs feed into Stage 3)
+                          (Stage 2 outputs + 1A/1B/1C priors feed into Stage 3)
                                         |
 Stage 3:  Answer Generator      Generate grounded QA pairs with contrastive answers
 
@@ -51,9 +53,9 @@ Stage 1D: Traffic Light & Pole 3D Detection   (standalone) Per-view VLM detectio
                                               signal housings + poles, lifted to 3D
 ```
 
-Stages 1A and 1B are independent and can run in parallel.
-Stage 2 requires both Stage 1A and 1B results.
-Stage 3 requires Stage 2 results.
+Stages 1A, 1B, and 1C are independent and can run in parallel.
+Stage 2 requires Stage 1A and 1B results.
+Stage 3 requires Stage 2 results; 1B and 1C priors are prepended to all 10 categories, 1A only to `Dynamic_Agents_and_Risk_Assessment`.
 Stage 1D is a standalone seed-data module — nothing downstream depends on it yet.
 
 ---
@@ -213,6 +215,53 @@ Per-sample JSON files saved to `{results_dir}/`:
 - `response`: Model's traffic signal analysis (signal states, orientations, lane governance)
 - `inference_time`: Time taken for the API call
 - `sample_metadata`: Sample index, scene token, camera heading table
+
+---
+
+## Stage 1C: Traffic Sign Extraction
+
+Extracts and classifies traffic signs (regulatory / warning / guide) visible across **all 6 camera views** — front and rear. For each sign it records category (by shape + color), text/symbol, orientation, and mount, then runs the **Sign Ego-Relevance Test** (C1–C7: orientation, road alignment, rear-view special case, signpost direction, lane scope, driving-command cross-check) to decide whether the sign applies to the ego vehicle. Runs in parallel with Stages 1A/1B; its results are prepended as prior context to **all 10 categories** in Stage 3.
+
+### How to Run
+
+```bash
+# Via shell script (recommended defaults)
+bash nuscenes_pipeline/scripts/run_traffic_sign_extraction.sh [START_IDX] [END_IDX] [NUM_WORKERS]
+
+# Via Python module
+python -m nuscenes_pipeline.modules.traffic_sign_extraction \
+    --start_idx 0 --end_idx 6018 --num_workers 8 \
+    --resize_factor 1 --to_global \
+    --max_new_tokens 4096 \
+    --results_dir traffic_sign_results
+```
+
+### Arguments
+
+Shares the common arguments with Stage 1A/1B (`--model_name`, `--api_base`, `--pkl_path`, `--sample_indices` / `--start_idx` / `--end_idx`, `--num_workers`, `--max_new_tokens`, `--to_global`). Stage-specific defaults:
+
+| Argument | Type | Default | Description |
+|----------|------|---------|-------------|
+| `--resize_factor` | int | `4` | Image downscale factor. Use `1` for production runs — sign text needs full 1600x900 resolution |
+| `--question` | str | (built-in default) | Custom sign-extraction task text |
+| `--results_dir` | str | `traffic_sign_results` | Directory to save per-sample result JSONs |
+
+### Input
+
+Same nuScenes pickle and 6-view camera images as Stage 1A/1B. Rear cameras are flipped for the egocentric view, consistent with the other prompt-based stages.
+
+### Output
+
+Per-sample JSON files saved to `{results_dir}/`:
+
+**Filename pattern:** `{idx:04d}_{scene_token}_{sample_token}_sign.json`
+
+**Contents:** metadata plus the model `response` with structured blocks:
+- `[SIGN-SCAN]`: per-view findings — sign type, text/symbol, mount, orientation, traffic stream, lane scope, `Applies to ego: y/n` with the failing C-check cited
+- `[SIGN-APPLICABLE]`: ego-applicable signs (or `None`)
+- `[SIGN-PRIORITY]`: highest applicable category (Regulatory > Warning > Guide)
+- `[SIGN-ACTION]`: derived ego obligation (e.g., "Stop required", "Max speed 50")
+- `[SIGN-CONFIDENCE]`: HIGH / MEDIUM / LOW / NONE
 
 ---
 
@@ -538,6 +587,7 @@ qwen-drive/
       question_selector.py            Stage 2  - Template selection from question bank
       answer_generator.py             Stage 3  - Contrastive QA pair generation
       answer_generator_rl.py          Stage 3 fork - RL (GRPO) training data with think traces
+      traffic_sign_extraction.py      Stage 1C - 6-view traffic sign extraction with Sign Ego-Relevance Test
       traffic_light_pole_detection.py Stage 1D - Per-view traffic light + pole detection, lifted to 3D (ego FLU)
       sft_prompt_builder.py           SFT training prompt construction
       sft_model_tester.py             Qualitative inference test for SFT-trained LoRA model
@@ -573,6 +623,7 @@ qwen-drive/
       run_postprocessing.sh           Wrapper for the full 5-step post-processing pipeline
       run_sft_model_tester.sh         Shell script for SFT model inference test
       run_answer_generator_rl.sh      Shell script for the RL (GRPO) Stage 3 fork
+      run_traffic_sign_extraction.sh  Shell script for Stage 1C
       run_traffic_light_pole_detection.sh  Shell script for Stage 1D (front_only / visualize tokens)
       run_demo_tester_8gpu.sh         8-GPU frame-stride fan-out for demo_tester + auto-merge (§16)
       run_command_labeler.sh          Launch the driving-command labeling web tool
