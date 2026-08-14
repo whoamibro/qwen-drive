@@ -1,0 +1,807 @@
+{
+  "generated": "2026-08-13T21:11:15",
+  "description": "Frozen virtual-camera rig for the custom demo dataset -> nuScenes-format conversion (see manifest report section 9).",
+  "frozen_config": {
+    "base_focal": 1100.0,
+    "back_focal": null,
+    "pitch_offsets_deg": {
+      "CAM_BACK_LEFT": -5.0,
+      "CAM_BACK_RIGHT": -5.0
+    },
+    "bottom_scales": {
+      "CAM_BACK": 0.85
+    },
+    "pin_tops": [
+      "CAM_BACK"
+    ],
+    "rear_flip_cameras": [
+      "CAM_BACK",
+      "CAM_BACK_LEFT",
+      "CAM_BACK_RIGHT"
+    ]
+  },
+  "source_elevations_deg": {
+    "CAM_FRONT_LEFT": 9.51,
+    "CAM_FRONT": -0.03,
+    "CAM_FRONT_RIGHT": 9.83,
+    "CAM_BACK_LEFT": -10.26,
+    "CAM_BACK": -27.42,
+    "CAM_BACK_RIGHT": -9.41
+  },
+  "cameras": {
+    "CAM_FRONT_LEFT": {
+      "channel": "1536p_h100_side_frontleft",
+      "source": {
+        "width": 1920,
+        "height": 1536,
+        "fx": 778.014935082282,
+        "fy": 907.6268123514185,
+        "cx": 953.7209376830708,
+        "cy": 770.1856077813919,
+        "vcs_extrinsic_nominal": {
+          "frame_from": "vcs",
+          "frame_to": "1536p_h100_side_frontleft",
+          "qw": -0.6130374390889879,
+          "qx": 0.7305895704290553,
+          "qy": -0.23035400672389783,
+          "qz": 0.19328996208223137,
+          "tx": 2.5482473973,
+          "ty": 0.9315601312000003,
+          "tz": 0.7405733406
+        },
+        "lcs_extrinsic_tuned": {
+          "frame_from": "lidar",
+          "frame_to": "1536p_h100_side_frontleft",
+          "qw": 0.7294789466660797,
+          "qx": -0.6194275811385254,
+          "qy": 0.18337073630598086,
+          "qz": -0.2248223991563671,
+          "tx": 1.4966635681261522,
+          "ty": 0.9691524015052811,
+          "tz": -1.2146177618593925
+        },
+        "road_orientation_measured_deg": {
+          "azimuth": 53.74,
+          "elevation": 9.5,
+          "roll": 0.61
+        }
+      },
+      "target": {
+        "width": 1600,
+        "height": 900,
+        "focal": 1100.0
+      },
+      "warp": {
+        "source_quad_tl_tr_br_bl": [
+          [
+            416.8,
+            564.99
+          ],
+          [
+            1490.64,
+            564.99
+          ],
+          [
+            1569.65,
+            1332.04
+          ],
+          [
+            337.8,
+            1332.04
+          ]
+        ],
+        "homography_out_to_src": [
+          [
+            0.67114726,
+            -0.13592932,
+            416.80313254
+          ],
+          [
+            0.0,
+            0.66242449,
+            564.99339979
+          ],
+          [
+            0.0,
+            -0.00014253,
+            1.0
+          ]
+        ],
+        "pure_rotation": true,
+        "decomposition_residual": 0.0
+      },
+      "effective_intrinsic": [
+        [
+          1100.0,
+          -0.0,
+          800.0
+        ],
+        [
+          0.0,
+          1100.0,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "rotation_src_from_virtual": [
+        [
+          1.0,
+          -0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.98625678,
+          0.16521974
+        ],
+        [
+          -0.0,
+          -0.16521974,
+          0.98625678
+        ]
+      ],
+      "virtual_axis_road_frame": {
+        "azimuth_deg": 53.84,
+        "elevation_deg": -0.01,
+        "roll_deg": -0.6,
+        "quaternion_road_from_virtual_wxyz": [
+          0.673281,
+          -0.671088,
+          0.222987,
+          -0.215892
+        ]
+      },
+      "axis_elevation_after_deg": 0.0,
+      "flip_at_inference": false
+    },
+    "CAM_FRONT": {
+      "channel": "2160p_h120_front",
+      "source": {
+        "width": 3840,
+        "height": 2160,
+        "fx": 1127.875533420273,
+        "fy": 1634.359632556825,
+        "cx": 1926.052850216227,
+        "cy": 1081.854212453718,
+        "vcs_extrinsic_nominal": {
+          "frame_from": "vcs",
+          "frame_to": "2160p_h120_front",
+          "qw": 0.5000000000000001,
+          "qx": -0.5,
+          "qy": 0.4999999999999999,
+          "qz": -0.5,
+          "tx": 1.968,
+          "ty": -0.267,
+          "tz": 1.4175
+        },
+        "lcs_extrinsic_tuned": {
+          "frame_from": "lidar",
+          "frame_to": "2160p_h120_front",
+          "qw": -0.504008718955386,
+          "qx": 0.5066301430955931,
+          "qy": -0.4934416229808688,
+          "qz": 0.4957988241554186,
+          "tx": 0.9626481502306276,
+          "ty": -0.26165475303485425,
+          "tz": -0.5005032542559041
+        },
+        "road_orientation_measured_deg": {
+          "azimuth": -1.41,
+          "elevation": -0.04,
+          "roll": 0.29
+        }
+      },
+      "target": {
+        "width": 1600,
+        "height": 900,
+        "focal": 1100.0
+      },
+      "warp": {
+        "source_quad_tl_tr_br_bl": [
+          [
+            1105.6,
+            412.25
+          ],
+          [
+            2746.5,
+            412.25
+          ],
+          [
+            2746.15,
+            1749.46
+          ],
+          [
+            1105.96,
+            1749.46
+          ]
+        ],
+        "homography_out_to_src": [
+          [
+            1.02556121,
+            0.000917,
+            1105.60388279
+          ],
+          [
+            0.0,
+            1.48661488,
+            412.25336763
+          ],
+          [
+            0.0,
+            4.8e-07,
+            1.0
+          ]
+        ],
+        "pure_rotation": true,
+        "decomposition_residual": 0.0
+      },
+      "effective_intrinsic": [
+        [
+          1100.0,
+          0.0,
+          800.0
+        ],
+        [
+          0.0,
+          1100.0,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "rotation_src_from_virtual": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          -0.0,
+          0.99999986,
+          -0.0005236
+        ],
+        [
+          0.0,
+          0.0005236,
+          0.99999986
+        ]
+      ],
+      "virtual_axis_road_frame": {
+        "azimuth_deg": -1.41,
+        "elevation_deg": -0.01,
+        "roll_deg": -0.29,
+        "quaternion_road_from_virtual_wxyz": [
+          0.495045,
+          -0.49257,
+          0.507407,
+          -0.50482
+        ]
+      },
+      "axis_elevation_after_deg": 0.0,
+      "flip_at_inference": false
+    },
+    "CAM_FRONT_RIGHT": {
+      "channel": "1536p_h100_side_frontright",
+      "source": {
+        "width": 1920,
+        "height": 1536,
+        "fx": 770.6246467118,
+        "fy": 901.3477390344334,
+        "cx": 961.9758651112663,
+        "cy": 767.738881933861,
+        "vcs_extrinsic_nominal": {
+          "frame_from": "vcs",
+          "frame_to": "1536p_h100_side_frontright",
+          "qw": 0.19328996208223154,
+          "qx": -0.23035400672389802,
+          "qy": 0.730589570429055,
+          "qz": -0.6130374390889879,
+          "tx": 2.555098294,
+          "ty": -0.9207078330999998,
+          "tz": 0.7408512784000001
+        },
+        "lcs_extrinsic_tuned": {
+          "frame_from": "lidar",
+          "frame_to": "1536p_h100_side_frontright",
+          "qw": -0.24610895417041415,
+          "qx": 0.20538408835859218,
+          "qy": -0.6102408949941434,
+          "qz": 0.7244679489135473,
+          "tx": 1.5063770197968906,
+          "ty": -0.9104335856802034,
+          "tz": -1.225104712867397
+        },
+        "road_orientation_measured_deg": {
+          "azimuth": -55.27,
+          "elevation": 9.82,
+          "roll": -0.14
+        }
+      },
+      "target": {
+        "width": 1600,
+        "height": 900,
+        "focal": 1100.0
+      },
+      "warp": {
+        "source_quad_tl_tr_br_bl": [
+          [
+            430.82,
+            569.25
+          ],
+          [
+            1493.13,
+            569.25
+          ],
+          [
+            1574.18,
+            1332.69
+          ],
+          [
+            349.78,
+            1332.69
+          ]
+        ],
+        "homography_out_to_src": [
+          [
+            0.66394413,
+            -0.14149824,
+            430.82056253
+          ],
+          [
+            0.0,
+            0.65224193,
+            569.25096869
+          ],
+          [
+            0.0,
+            -0.00014709,
+            1.0
+          ]
+        ],
+        "pure_rotation": true,
+        "decomposition_residual": 0.0
+      },
+      "effective_intrinsic": [
+        [
+          1100.0,
+          0.0,
+          800.0
+        ],
+        [
+          0.0,
+          1100.0,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "rotation_src_from_virtual": [
+        [
+          1.0,
+          -0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.98531864,
+          0.17072543
+        ],
+        [
+          -0.0,
+          -0.17072543,
+          0.98531864
+        ]
+      ],
+      "virtual_axis_road_frame": {
+        "azimuth_deg": -55.29,
+        "elevation_deg": -0.01,
+        "roll_deg": 0.14,
+        "quaternion_road_from_virtual_wxyz": [
+          -0.21007,
+          0.211732,
+          -0.674727,
+          0.675118
+        ]
+      },
+      "axis_elevation_after_deg": 0.0,
+      "flip_at_inference": false
+    },
+    "CAM_BACK_LEFT": {
+      "channel": "1536p_h100_side_rearleft",
+      "source": {
+        "width": 1920,
+        "height": 1536,
+        "fx": 775.0689289314026,
+        "fy": 904.9830488654065,
+        "cx": 959.1629368871851,
+        "cy": 764.4681620640932,
+        "vcs_extrinsic_nominal": {
+          "frame_from": "vcs",
+          "frame_to": "1536p_h100_side_rearleft",
+          "qw": 0.7198463103929543,
+          "qx": -0.6040227735550536,
+          "qy": -0.2198463103929542,
+          "qz": 0.262002630229385,
+          "tx": 2.5334000000000003,
+          "ty": 0.9412999999999999,
+          "tz": 0.7127
+        },
+        "lcs_extrinsic_tuned": {
+          "frame_from": "lidar",
+          "frame_to": "1536p_h100_side_rearleft",
+          "qw": -0.5990759049827318,
+          "qx": 0.718849057680268,
+          "qy": 0.2690168322214988,
+          "qz": -0.22802200841765616,
+          "tx": 1.4630200704775493,
+          "ty": 0.9972490552966354,
+          "tz": -1.2590867334547993
+        },
+        "road_orientation_measured_deg": {
+          "azimuth": 128.72,
+          "elevation": -10.25,
+          "roll": -0.33
+        }
+      },
+      "target": {
+        "width": 1600,
+        "height": 900,
+        "focal": 1100.0
+      },
+      "warp": {
+        "source_quad_tl_tr_br_bl": [
+          [
+            370.94,
+            293.18
+          ],
+          [
+            1547.39,
+            293.18
+          ],
+          [
+            1504.69,
+            1040.96
+          ],
+          [
+            413.64,
+            1040.96
+          ]
+        ],
+        "homography_out_to_src": [
+          [
+            0.73528006,
+            0.08341761,
+            370.9388901
+          ],
+          [
+            0.0,
+            0.92139479,
+            293.1826389
+          ],
+          [
+            0.0,
+            8.697e-05,
+            1.0
+          ]
+        ],
+        "pure_rotation": true,
+        "decomposition_residual": 0.0
+      },
+      "effective_intrinsic": [
+        [
+          1100.0,
+          -0.0,
+          800.0
+        ],
+        [
+          0.0,
+          1100.0,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "rotation_src_from_virtual": [
+        [
+          1.0,
+          -0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.99578894,
+          -0.09167542
+        ],
+        [
+          0.0,
+          0.09167542,
+          0.99578894
+        ]
+      ],
+      "virtual_axis_road_frame": {
+        "azimuth_deg": 128.75,
+        "elevation_deg": -4.99,
+        "roll_deg": 0.32,
+        "quaternion_road_from_virtual_wxyz": [
+          0.638024,
+          -0.694769,
+          -0.246552,
+          0.222336
+        ]
+      },
+      "axis_elevation_after_deg": -5.0,
+      "flip_at_inference": true
+    },
+    "CAM_BACK": {
+      "channel": "1536p_h100_side_rearcenter",
+      "source": {
+        "width": 1920,
+        "height": 1536,
+        "fx": 770.6246467118,
+        "fy": 901.3477390344334,
+        "cx": 961.9758651112663,
+        "cy": 767.738881933861,
+        "vcs_extrinsic_nominal": {
+          "frame_from": "vcs",
+          "frame_to": "1536p_h100_side_rearcenter",
+          "qw": 0.6029076421267912,
+          "qx": -0.36946227827088557,
+          "qy": 0.36946227827088546,
+          "qz": -0.6029076421267909,
+          "tx": -0.8375999999999999,
+          "ty": 2.456278665776993e-32,
+          "tz": 0.9927699999999998
+        },
+        "lcs_extrinsic_tuned": {
+          "frame_from": "lidar",
+          "frame_to": "1536p_h100_side_rearcenter",
+          "qw": -0.36127893324381655,
+          "qx": 0.5965465263509844,
+          "qy": 0.6119145828597312,
+          "qz": -0.3730553813797432,
+          "tx": -1.910950408363964,
+          "ty": -0.04486342098245068,
+          "tz": -0.9689047291211549
+        },
+        "road_orientation_measured_deg": {
+          "azimuth": 179.01,
+          "elevation": -27.4,
+          "roll": -0.17
+        }
+      },
+      "target": {
+        "width": 1600,
+        "height": 900,
+        "focal": 702.881
+      },
+      "warp": {
+        "source_quad_tl_tr_br_bl": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            1920.0,
+            0.0
+          ],
+          [
+            1658.82,
+            1201.62
+          ],
+          [
+            265.13,
+            1201.62
+          ]
+        ],
+        "homography_out_to_src": [
+          [
+            1.2,
+            0.40584376,
+            0.0
+          ],
+          [
+            0.0,
+            1.83934305,
+            0.0
+          ],
+          [
+            0.0,
+            0.0004196,
+            1.0
+          ]
+        ],
+        "pure_rotation": false,
+        "decomposition_residual": 0.0
+      },
+      "effective_intrinsic": [
+        [
+          755.4248,
+          -1.2406,
+          801.03
+        ],
+        [
+          0.0,
+          678.0923,
+          336.9888
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "rotation_src_from_virtual": [
+        [
+          1.0,
+          -0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.97030641,
+          -0.24187905
+        ],
+        [
+          -0.0,
+          0.24187905,
+          0.97030641
+        ]
+      ],
+      "virtual_axis_road_frame": {
+        "azimuth_deg": 179.05,
+        "elevation_deg": -13.4,
+        "roll_deg": 0.15,
+        "quaternion_road_from_virtual_wxyz": [
+          -0.442435,
+          0.558755,
+          0.551079,
+          -0.433999
+        ]
+      },
+      "axis_elevation_after_deg": -20.5,
+      "flip_at_inference": true
+    },
+    "CAM_BACK_RIGHT": {
+      "channel": "1536p_h100_side_rearright",
+      "source": {
+        "width": 1920,
+        "height": 1536,
+        "fx": 778.1018987505971,
+        "fy": 907.7614944340688,
+        "cx": 966.1711644537588,
+        "cy": 763.4980336994928,
+        "vcs_extrinsic_nominal": {
+          "frame_from": "vcs",
+          "frame_to": "1536p_h100_side_rearright",
+          "qw": 0.2620026302293849,
+          "qx": -0.21984631039295408,
+          "qy": -0.6040227735550537,
+          "qz": 0.7198463103929543,
+          "tx": 2.5400388132,
+          "ty": -0.9332339758,
+          "tz": 0.7146977537
+        },
+        "lcs_extrinsic_tuned": {
+          "frame_from": "lidar",
+          "frame_to": "1536p_h100_side_rearright",
+          "qw": -0.20350539700554554,
+          "qx": 0.2450856973565651,
+          "qy": 0.7223061255627401,
+          "qz": -0.613834192038375,
+          "tx": 1.5136766050998485,
+          "ty": -0.8654943273003176,
+          "tz": -1.2663173537738877
+        },
+        "road_orientation_measured_deg": {
+          "azimuth": -129.72,
+          "elevation": -9.4,
+          "roll": -0.38
+        }
+      },
+      "target": {
+        "width": 1600,
+        "height": 900,
+        "focal": 1100.0
+      },
+      "warp": {
+        "source_quad_tl_tr_br_bl": [
+          [
+            380.11,
+            307.75
+          ],
+          [
+            1552.23,
+            307.75
+          ],
+          [
+            1516.38,
+            1055.63
+          ],
+          [
+            415.96,
+            1055.63
+          ]
+        ],
+        "homography_out_to_src": [
+          [
+            0.73257844,
+            0.06994534,
+            380.10841199
+          ],
+          [
+            0.0,
+            0.90739482,
+            307.75469972
+          ],
+          [
+            0.0,
+            7.239e-05,
+            1.0
+          ]
+        ],
+        "pure_rotation": true,
+        "decomposition_residual": 0.0
+      },
+      "effective_intrinsic": [
+        [
+          1100.0,
+          0.0,
+          800.0
+        ],
+        [
+          0.0,
+          1100.0,
+          450.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "rotation_src_from_virtual": [
+        [
+          1.0,
+          -0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.99703935,
+          -0.07689305
+        ],
+        [
+          -0.0,
+          0.07689305,
+          0.99703935
+        ]
+      ],
+      "virtual_axis_road_frame": {
+        "azimuth_deg": -129.69,
+        "elevation_deg": -4.99,
+        "roll_deg": 0.37,
+        "quaternion_road_from_virtual_wxyz": [
+          -0.231458,
+          0.247994,
+          0.694255,
+          -0.634772
+        ]
+      },
+      "axis_elevation_after_deg": -5.0,
+      "flip_at_inference": true
+    }
+  }
+}

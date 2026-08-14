@@ -1,0 +1,126 @@
+{
+  "generated": "2026-08-13T17:55:05",
+  "method": "trajectory-anchored road frame + tuned lcs_extrinsic (see module docstring)",
+  "azimuth_deg": {
+    "CAM_FRONT_LEFT": 54.05,
+    "CAM_FRONT": -1.11,
+    "CAM_FRONT_RIGHT": -54.97,
+    "CAM_BACK_LEFT": 129.02,
+    "CAM_BACK": 179.31,
+    "CAM_BACK_RIGHT": -129.42
+  },
+  "elevation_deg": {
+    "CAM_FRONT_LEFT": 9.51,
+    "CAM_FRONT": -0.03,
+    "CAM_FRONT_RIGHT": 9.83,
+    "CAM_BACK_LEFT": -10.26,
+    "CAM_BACK": -27.42,
+    "CAM_BACK_RIGHT": -9.41
+  },
+  "roll_deg": {
+    "CAM_FRONT_LEFT": 0.62,
+    "CAM_FRONT": 0.29,
+    "CAM_FRONT_RIGHT": -0.15,
+    "CAM_BACK_LEFT": -0.32,
+    "CAM_BACK": -0.17,
+    "CAM_BACK_RIGHT": -0.39
+  },
+  "per_clip": {
+    "demo_1_20260414_105436": {
+      "CAM_FRONT": {
+        "azimuth": -1.41,
+        "elevation": -0.04,
+        "roll": 0.29
+      },
+      "CAM_FRONT_LEFT": {
+        "azimuth": 53.74,
+        "elevation": 9.5,
+        "roll": 0.61
+      },
+      "CAM_FRONT_RIGHT": {
+        "azimuth": -55.27,
+        "elevation": 9.82,
+        "roll": -0.14
+      },
+      "CAM_BACK_LEFT": {
+        "azimuth": 128.72,
+        "elevation": -10.25,
+        "roll": -0.33
+      },
+      "CAM_BACK_RIGHT": {
+        "azimuth": -129.72,
+        "elevation": -9.4,
+        "roll": -0.38
+      },
+      "CAM_BACK": {
+        "azimuth": 179.01,
+        "elevation": -27.4,
+        "roll": -0.17
+      }
+    },
+    "demo_1_20260414_112636": {
+      "CAM_FRONT": {
+        "azimuth": -1.0,
+        "elevation": -0.09,
+        "roll": 0.29
+      },
+      "CAM_FRONT_LEFT": {
+        "azimuth": 54.14,
+        "elevation": 9.48,
+        "roll": 0.57
+      },
+      "CAM_FRONT_RIGHT": {
+        "azimuth": -54.86,
+        "elevation": 9.8,
+        "roll": -0.1
+      },
+      "CAM_BACK_LEFT": {
+        "azimuth": 129.13,
+        "elevation": -10.22,
+        "roll": -0.37
+      },
+      "CAM_BACK_RIGHT": {
+        "azimuth": -129.32,
+        "elevation": -9.37,
+        "roll": -0.34
+      },
+      "CAM_BACK": {
+        "azimuth": 179.42,
+        "elevation": -27.36,
+        "roll": -0.17
+      }
+    },
+    "demo_1_20260414_192304": {
+      "CAM_FRONT": {
+        "azimuth": -0.91,
+        "elevation": 0.05,
+        "roll": 0.28
+      },
+      "CAM_FRONT_LEFT": {
+        "azimuth": 54.26,
+        "elevation": 9.56,
+        "roll": 0.69
+      },
+      "CAM_FRONT_RIGHT": {
+        "azimuth": -54.78,
+        "elevation": 9.88,
+        "roll": -0.22
+      },
+      "CAM_BACK_LEFT": {
+        "azimuth": 129.21,
+        "elevation": -10.31,
+        "roll": -0.26
+      },
+      "CAM_BACK_RIGHT": {
+        "azimuth": -129.21,
+        "elevation": -9.46,
+        "roll": -0.45
+      },
+      "CAM_BACK": {
+        "azimuth": 179.51,
+        "elevation": -27.5,
+        "roll": -0.17
+      }
+    }
+  }
+}
