@@ -60,6 +60,7 @@ from PIL import Image, ImageDraw, ImageFont
 # ---------------------------------------------------------------------------
 GRID_COLS = 3
 GRID_ROWS = 2
+TEXT_SCALE = 2.5  # global multiplier for all text-pane font sizes
 CAMERA_ORDER = [
     "CAM_FRONT_LEFT", "CAM_FRONT", "CAM_FRONT_RIGHT",
     "CAM_BACK_LEFT",  "CAM_BACK",  "CAM_BACK_RIGHT",
@@ -94,7 +95,9 @@ CATEGORY_TO_ABBR = {
 # Font resolution
 # ---------------------------------------------------------------------------
 def _resolve_font(size: int) -> ImageFont.FreeTypeFont:
-    """Try common truetype fonts; fall back to PIL's bitmap default."""
+    """Try common truetype fonts; fall back to matplotlib's bundled DejaVu,
+    then Pillow's scalable default (>=10.1). The final bitmap fallback ignores
+    `size`, so everything scalable is tried first."""
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -107,7 +110,15 @@ def _resolve_font(size: int) -> ImageFont.FreeTypeFont:
                 return ImageFont.truetype(path, size)
             except OSError:
                 continue
-    return ImageFont.load_default()
+    try:
+        from matplotlib import font_manager
+        return ImageFont.truetype(font_manager.findfont("DejaVu Sans"), size)
+    except (ImportError, OSError, ValueError):
+        pass
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        return ImageFont.load_default()
 
 
 # ---------------------------------------------------------------------------
@@ -203,12 +214,85 @@ def _parse_reasoning(pred_text: str) -> str:
         return ""
 
 
+def _pane_fonts(tile_h: int):
+    """The three text-pane fonts, scaled by TEXT_SCALE."""
+    header_font = _resolve_font(int(max(18, tile_h // 22) * TEXT_SCALE))
+    body_font   = _resolve_font(int(max(16, tile_h // 26) * TEXT_SCALE))
+    reason_font = _resolve_font(int(max(14, tile_h // 30) * TEXT_SCALE))
+    return header_font, body_font, reason_font
+
+
+def _wrap_pane_lines(pan_w: int, fonts, question_text: str,
+                     answer_text: str, reasoning_snippet: str):
+    """Wrap all pane text WITHOUT truncation. DejaVu's average glyph advance
+    is ~0.55 x point size; 0.58 leaves margin against the right edge."""
+    _, body_font, reason_font = fonts
+    x_pad = 16
+    usable_w = pan_w - 2 * x_pad
+    wrap_w = max(30, int(usable_w / (body_font.size * 0.58)))
+    q_lines = textwrap.wrap(question_text, width=wrap_w)
+    answer_lines = textwrap.wrap(f"PRED: {answer_text}", width=wrap_w)
+    reason_wrap_w = max(30, int(usable_w / (reason_font.size * 0.58)))
+    reason_lines = (textwrap.wrap(reasoning_snippet, width=reason_wrap_w)
+                    if reasoning_snippet else [])
+    return q_lines, answer_lines, reason_lines
+
+
+def _pane_height(fonts, q_lines, answer_lines, reason_lines) -> int:
+    header_font, body_font, reason_font = fonts
+    return (10 + header_font.size + 10
+            + len(q_lines) * (body_font.size + 4)
+            + 4 + len(answer_lines) * (body_font.size + 6)
+            + len(reason_lines) * (reason_font.size + 2)
+            + 12)
+
+
+def _derive_pane_texts(r: dict, q_meta: dict):
+    """Answer + reasoning strings for the pane, with fallbacks:
+    parsed answer -> as-is (+ MCQ option text); unified JSON without answer
+    -> '(unparsed)'; free-form output (e.g. base model) -> the raw response."""
+    answer_text = (r.get("pred_answer") or "").strip()
+    reasoning = _parse_reasoning(r.get("pred_text", ""))
+    if answer_text:
+        if q_meta.get("answer_type") == "mcq" and q_meta.get("options"):
+            # Attach option text next to the letter for readability
+            try:
+                letter_i = ord(answer_text.strip("() ").upper()[0]) - ord("A")
+                if 0 <= letter_i < len(q_meta["options"]):
+                    answer_text = f"{answer_text}  = \"{q_meta['options'][letter_i]}\""
+            except (IndexError, TypeError):
+                pass
+    elif reasoning:
+        answer_text = "(unparsed)"
+    else:
+        raw = " ".join((r.get("pred_text") or "").split())
+        answer_text = "(free-form response)"
+        reasoning = raw or "(empty response)"
+    return answer_text, reasoning
+
+
 def compose_frame(pan: Image.Image, tile_w: int, tile_h: int,
                   header_text: str, question_text: str,
                   answer_text: str, reasoning_snippet: str,
-                  text_pane_height: int) -> Image.Image:
-    """Stack the panoramic grid on top of a text pane. Even dims for H.264."""
+                  text_pane_height: int = 0) -> Image.Image:
+    """Stack the panoramic grid on top of a text pane. Even dims for H.264.
+
+    All wrapped lines are rendered (no truncation). `text_pane_height` is a
+    minimum — pass the per-video maximum so every frame of an MP4 has
+    identical dimensions; the pane still grows if this frame needs more.
+    """
     pan_w, pan_h = pan.size
+
+    fonts = _pane_fonts(tile_h)
+    header_font, body_font, reason_font = fonts
+    x_pad = 16
+
+    q_lines, answer_lines, reason_lines = _wrap_pane_lines(
+        pan_w, fonts, question_text, answer_text, reasoning_snippet)
+
+    text_pane_height = max(_pane_height(fonts, q_lines, answer_lines, reason_lines),
+                           text_pane_height)
+
     total_h = pan_h + text_pane_height
     if total_h % 2:
         total_h += 1
@@ -222,33 +306,28 @@ def compose_frame(pan: Image.Image, tile_w: int, tile_h: int,
     canvas.paste(pan, (0, 0))
 
     draw = ImageDraw.Draw(canvas)
-    header_font = _resolve_font(max(18, tile_h // 22))
-    body_font   = _resolve_font(max(16, tile_h // 26))
-    reason_font = _resolve_font(max(14, tile_h // 30))
 
-    x_pad = 16
     y = pan_h + 10
     # Header: category / question_id / frame progress
     draw.text((x_pad, y), header_text, fill=(120, 200, 255), font=header_font)
     y += header_font.size + 10
 
     # Question (wrapped)
-    wrap_w = max(30, pan_w // (body_font.size // 2 or 8))
-    for line in textwrap.wrap(question_text, width=wrap_w)[:2]:
+    for line in q_lines:
         draw.text((x_pad, y), line, fill=(240, 240, 240), font=body_font)
         y += body_font.size + 4
 
     # Predicted answer
     y += 4
-    draw.text((x_pad, y), f"PRED: {answer_text}", fill=(255, 190, 100), font=body_font,
-              stroke_width=1, stroke_fill=(0, 0, 0))
-    y += body_font.size + 6
+    for line in answer_lines:
+        draw.text((x_pad, y), line, fill=(255, 190, 100), font=body_font,
+                  stroke_width=1, stroke_fill=(0, 0, 0))
+        y += body_font.size + 6
 
-    # Reasoning snippet
-    if reasoning_snippet:
-        for line in textwrap.wrap(reasoning_snippet, width=wrap_w)[:3]:
-            draw.text((x_pad, y), line, fill=(180, 180, 200), font=reason_font)
-            y += reason_font.size + 2
+    # Reasoning / raw-response snippet
+    for line in reason_lines:
+        draw.text((x_pad, y), line, fill=(180, 180, 200), font=reason_font)
+        y += reason_font.size + 2
 
     return canvas
 
@@ -273,6 +352,26 @@ def render_category(cat_label: str, cat_abbr: str,
     for f in frames:
         for r in f["results"]:
             result_lookup[(f["frame_pos"], r["question_id"])] = r
+
+    # Pre-pass: measure the tallest text pane over every (question, frame) of
+    # this category so all frames of the MP4 share identical dimensions
+    # (libx264 requires a constant frame size). Tile dims are probed from the
+    # first image header — no pixel decode needed.
+    with Image.open(frames[0]["image_paths"][0]) as _im:
+        _w0, _h0 = _im.size
+    _tile_w = _w0 // resize_factor if resize_factor > 1 else _w0
+    _tile_h = _h0 // resize_factor if resize_factor > 1 else _h0
+    _pan_w = _tile_w * GRID_COLS
+    _fonts = _pane_fonts(_tile_h)
+    pane_h_max = 0
+    for q_meta in cat_questions:
+        for f in frames:
+            r = result_lookup.get((f["frame_pos"], q_meta["question_id"]))
+            if r is None:
+                continue
+            a_txt, reason = _derive_pane_texts(r, q_meta)
+            lines = _wrap_pane_lines(_pan_w, _fonts, q_meta["question"], a_txt, reason)
+            pane_h_max = max(pane_h_max, _pane_height(_fonts, *lines))
 
     frame_paths: List[str] = []
     counter = 0
@@ -300,21 +399,11 @@ def render_category(cat_label: str, cat_abbr: str,
                       f"frame {f['frame_pos']+1}/{n_frames}"
                       f"{ts_s}")
 
-            answer_text = (r.get("pred_answer") or "(unparsed)").strip()
-            if q_meta.get("answer_type") == "mcq" and q_meta.get("options"):
-                # Attach option text next to the letter for readability
-                try:
-                    letter_i = ord(answer_text.strip("() ").upper()[0]) - ord("A")
-                    if 0 <= letter_i < len(q_meta["options"]):
-                        answer_text = f"{answer_text}  = \"{q_meta['options'][letter_i]}\""
-                except (IndexError, TypeError):
-                    pass
+            answer_text, reasoning = _derive_pane_texts(r, q_meta)
 
-            reasoning = _parse_reasoning(r.get("pred_text", ""))
-            text_pane_h = max(140, tile_h // 3)
             composed = compose_frame(pan, tile_w, tile_h, header,
                                      q_meta["question"], answer_text,
-                                     reasoning, text_pane_h)
+                                     reasoning, text_pane_height=pane_h_max)
 
             frame_path = os.path.join(temp_dir, f"frame_{counter:06d}.png")
             composed.save(frame_path)

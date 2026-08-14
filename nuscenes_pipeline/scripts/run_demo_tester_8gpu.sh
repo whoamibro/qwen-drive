@@ -45,8 +45,16 @@ PROJECT_ROOT="$(cd "$PROJECT_ROOT/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 BASE_MODEL="${BASE_MODEL:-ckpts/qwen3_vl_8b_instruct}"
-if [ -z "${LORA_PATH:-}" ]; then
-    echo "ERROR: LORA_PATH is required (env var)." >&2
+# vLLM backend: when VLLM_URL is set, workers are lightweight API clients —
+# the server owns the weights and LORA_PATH is not needed (pick base vs LoRA
+# via MODEL_NAME, matching --served-model-name / --lora-modules names).
+BACKEND_FLAGS=()
+if [ -n "${VLLM_URL:-}" ]; then
+    MODEL_NAME="${MODEL_NAME:-qwen3vl-8b}"
+    BACKEND_FLAGS=(--api_base "$VLLM_URL" --model_name "$MODEL_NAME")
+    LORA_PATH="${LORA_PATH:-none}"
+elif [ -z "${LORA_PATH:-}" ]; then
+    echo "ERROR: LORA_PATH is required (env var) unless VLLM_URL is set." >&2
     exit 1
 fi
 PKL_PATH="${PKL_PATH:-data/nuscenes/nuscenes2d_ego_temporal_infos_val.pkl}"
@@ -93,6 +101,11 @@ echo "============================================================"
 echo "demo_tester 8-GPU fan-out"
 echo "  scene_token   : $SCENE_TOKEN  (short=$SCENE_SHORT)"
 echo "  mode          : $MODE_DESC"
+if [ -n "${VLLM_URL:-}" ]; then
+    echo "  backend       : vllm ($VLLM_URL, model=$MODEL_NAME)"
+else
+    echo "  backend       : hf (in-process)"
+fi
 echo "  base_model    : $BASE_MODEL"
 echo "  lora_path     : $LORA_PATH"
 echo "  pkl_path      : $PKL_PATH"
@@ -113,6 +126,7 @@ for ((i=0; i<NPROC; i++)); do
         python -m nuscenes_pipeline.modules.demo_tester \
             --scene_token "$SCENE_TOKEN" \
             "${MODE_FLAG[@]}" \
+            "${BACKEND_FLAGS[@]}" \
             --base_model "$BASE_MODEL" \
             --lora_path "$LORA_PATH" \
             --pkl_path "$PKL_PATH" \

@@ -59,7 +59,9 @@ from nuscenes_pipeline.modules.sft_model_tester import (
     load_model,
     prepare_messages,
     run_inference_with_ids,
+    run_inference_vllm,
     _parse_grounding_from_token_ids,
+    _parse_grounding_string,
     _extract_answer,
     _normalize_answer,
 )
@@ -148,7 +150,16 @@ def main():
                       help="Mode B: a single custom question to ask at every frame.")
 
     p.add_argument("--base_model", type=str, default="ckpts/qwen3_vl_8b_instruct")
-    p.add_argument("--lora_path",  type=str, required=True)
+    p.add_argument("--lora_path",  type=str, default="none",
+                   help="LoRA adapter dir; 'none' (default) runs the base model only. "
+                        "Ignored with --api_base (the server owns the weights).")
+    p.add_argument("--api_base", type=str, default=None,
+                   help="OpenAI-compatible server URL (e.g. http://localhost:8000/v1). "
+                        "When set, inference goes through the server instead of "
+                        "loading the model in-process.")
+    p.add_argument("--model_name", type=str, default="qwen3vl-8b",
+                   help="Served model name to request with --api_base: the base "
+                        "model's --served-model-name, or a --lora-modules adapter name.")
     p.add_argument("--pkl_path",   type=str,
                    default="data/nuscenes/nuscenes2d_ego_temporal_infos_val.pkl")
     p.add_argument("--data_root",  type=str, default=None,
@@ -242,17 +253,25 @@ def main():
         out_name = "predictions.json"
     out_path = os.path.join(output_dir, out_name)
 
-    # ---- Load model ----
-    print(f"[demo_tester] loading model...")
-    model, processor = load_model(args.base_model, args.lora_path)
-    tokenizer = processor.tokenizer
+    # ---- Load model / connect to server ----
+    if args.api_base:
+        from openai import OpenAI
+        print(f"[demo_tester] vllm backend — {args.api_base}  model={args.model_name}")
+        client = OpenAI(base_url=args.api_base, api_key="EMPTY")
+        model = processor = tokenizer = None
+    else:
+        print(f"[demo_tester] loading model...")
+        model, processor = load_model(args.base_model, args.lora_path)
+        tokenizer = processor.tokenizer
 
     # ---- Inference loop ----
     result = {
         "scene_token":  full_scene_tok,
         "mode":         mode,
         "base_model":   args.base_model,
-        "lora_path":    os.path.abspath(args.lora_path),
+        "lora_path":    (os.path.abspath(args.lora_path)
+                         if args.lora_path and args.lora_path.lower() != "none" else None),
+        "backend":      "vllm" if args.api_base else "hf",
         "pkl_path":     os.path.abspath(args.pkl_path),
         "resize_factor": args.resize_factor,
         "max_new_tokens": args.max_new_tokens,
@@ -260,6 +279,9 @@ def main():
         "n_questions":  len(questions),
         "frames":       [],
     }
+    if args.api_base:
+        result["api_base"] = args.api_base
+        result["model_name"] = args.model_name
     if stride > 1:
         result["sample_stride"] = stride
         result["sample_offset"] = offset
@@ -286,11 +308,17 @@ def main():
             messages, sys_prompt, user_prompt = prepare_messages(
                 sample, loader, user_q_text, resize_factor=args.resize_factor,
             )
-            pred_text, pred_token_ids = run_inference_with_ids(
-                model, processor, messages, args.max_new_tokens,
-            )
+            if args.api_base:
+                pred_text, raw_text = run_inference_vllm(
+                    client, args.model_name, messages, args.max_new_tokens,
+                )
+                pred_grounding = _parse_grounding_string(raw_text)
+            else:
+                pred_text, pred_token_ids = run_inference_with_ids(
+                    model, processor, messages, args.max_new_tokens,
+                )
+                pred_grounding = _parse_grounding_from_token_ids(pred_token_ids, tokenizer)
             pred_answer = _extract_answer(pred_text)
-            pred_grounding = _parse_grounding_from_token_ids(pred_token_ids, tokenizer)
 
             entry = {
                 "question_id":    q["question_id"],

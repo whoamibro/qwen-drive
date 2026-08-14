@@ -18,7 +18,11 @@
 #   SEED      sampling seed (default: 42)
 #
 # Environment overrides:
-#   LORA_PATH    (REQUIRED) LoRA adapter dir
+#   LORA_PATH    (REQUIRED unless VLLM_URL is set) LoRA adapter dir
+#   VLLM_URL     OpenAI-compatible server URL (e.g. http://localhost:8000/v1);
+#                switches inference to the vLLM backend — no in-process model
+#   MODEL_NAME   served model to request with VLLM_URL (default: qwen3vl-8b);
+#                use a --lora-modules adapter name for the fine-tuned mode
 #   QUESTION     (default: the safety-awareness demo question)
 #   BATCH_NAME   output subdir under demo_test_results/ (default: batch_<lora leafdir>)
 #   PKL_PATH     (default: <project_root>/data/nuscenes/..._val.pkl, absolute)
@@ -43,11 +47,21 @@ cd "$PROJECT_ROOT"
 N_SCENES=${1:-30}
 SEED=${2:-42}
 
-if [ -z "${LORA_PATH:-}" ]; then
-    echo "ERROR: LORA_PATH is required (env var)." >&2
+# vLLM backend: VLLM_URL (+ MODEL_NAME) replaces in-process model loading;
+# LORA_PATH is then unnecessary — MODEL_NAME picks base vs LoRA on the server.
+if [ -n "${VLLM_URL:-}" ]; then
+    MODEL_NAME="${MODEL_NAME:-qwen3vl-8b}"
+    LORA_PATH="${LORA_PATH:-none}"
+    BATCH_NAME="${BATCH_NAME:-batch_${MODEL_NAME}}"
+elif [ -z "${LORA_PATH:-}" ]; then
+    echo "ERROR: LORA_PATH is required (env var) unless VLLM_URL is set." >&2
     exit 1
 fi
-QUESTION="${QUESTION:-To drive safely, is there any object that we have to be aware of?}"
+
+QUERY="To drive safely, is there any object that we have to be aware of?"
+#QUERY="Is there any possibility of collision, if ego vehicle rise up the speed?"
+QUESTION="${QUESTION:-$QUERY}"
+
 PKL_PATH="${PKL_PATH:-$PROJECT_ROOT/data/nuscenes/nuscenes2d_ego_temporal_infos_val.pkl}"
 BATCH_NAME="${BATCH_NAME:-batch_$(basename "$LORA_PATH")}"
 OUTPUT_ROOT="demo_test_results/$BATCH_NAME"

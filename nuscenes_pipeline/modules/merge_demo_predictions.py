@@ -34,6 +34,7 @@ HEADER_KEYS_TO_CHECK = (
     "scene_token", "mode", "base_model", "lora_path", "pkl_path",
     "resize_factor", "max_new_tokens", "n_frames", "n_questions",
     "demo_questions_path",
+    "backend", "api_base", "model_name",
 )
 
 

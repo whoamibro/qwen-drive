@@ -83,10 +83,13 @@ CAM_LABELS = {
 }
 
 
-def load_model(base_model_path: str, lora_path: str):
-    """Load base Qwen3-VL model with LoRA adapter merged."""
+def load_model(base_model_path: str, lora_path: str = None):
+    """Load base Qwen3-VL model, with the LoRA adapter merged when given.
+
+    A lora_path of None, "", or "none" (case-insensitive) loads the base
+    model only.
+    """
     from transformers import AutoModelForImageTextToText, AutoProcessor
-    from peft import PeftModel
 
     print(f"Loading base model: {base_model_path}")
     model = AutoModelForImageTextToText.from_pretrained(
@@ -96,11 +99,15 @@ def load_model(base_model_path: str, lora_path: str):
         device_map="auto",
     )
 
-    print(f"Loading LoRA adapter: {lora_path}")
-    model = PeftModel.from_pretrained(model, lora_path)
-    model = model.merge_and_unload()
+    if lora_path and lora_path.lower() != "none":
+        from peft import PeftModel
+        print(f"Loading LoRA adapter: {lora_path}")
+        model = PeftModel.from_pretrained(model, lora_path)
+        model = model.merge_and_unload()
+        print("Model loaded and LoRA merged.")
+    else:
+        print("No LoRA adapter — using the base model as-is.")
     model.eval()
-    print("Model loaded and LoRA merged.")
 
     processor = AutoProcessor.from_pretrained(base_model_path, use_fast=True)
     return model, processor
@@ -197,6 +204,54 @@ def run_inference_with_ids(model, processor, messages, max_new_tokens=2048):
     # Return as a plain Python list for downstream tokenizer-based parsing.
     pred_token_ids = generated_ids[0].tolist()
     return pred_text, pred_token_ids
+
+
+# Matches Qwen special-token markers like <|box_start|>, <|im_end|>, ...
+_SPECIAL_TOKEN_RE = re.compile(r"<\|[^<>|]+\|>")
+
+
+def run_inference_vllm(client, model_name, messages, max_new_tokens=2048):
+    """Greedy inference against a vLLM OpenAI-compatible server.
+
+    Mirrors `run_inference_with_ids` for the API backend: sends the same chat
+    messages (PIL images base64-encoded as data URIs) and requests
+    `skip_special_tokens: false` so `<|box_start|>`/`<|object_ref_start|>`
+    markers survive in the returned text — grounding is then parsed from the
+    raw text via `_parse_grounding_string` instead of token IDs.
+
+    Returns (pred_text, raw_text): `pred_text` has the special-token markers
+    stripped (equivalent to a skip_special_tokens=True decode); `raw_text`
+    keeps them for grounding extraction.
+    """
+    import base64
+    import io
+
+    api_messages = []
+    for m in messages:
+        content = []
+        for chunk in m["content"]:
+            if chunk.get("type") == "image":
+                buf = io.BytesIO()
+                chunk["image"].save(buf, format="JPEG", quality=95)
+                b64 = base64.b64encode(buf.getvalue()).decode()
+                content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                })
+            else:
+                content.append({"type": "text", "text": chunk["text"]})
+        api_messages.append({"role": m["role"], "content": content})
+
+    resp = client.chat.completions.create(
+        model=model_name,
+        messages=api_messages,
+        max_tokens=max_new_tokens,
+        temperature=0.0,
+        extra_body={"skip_special_tokens": False},
+    )
+    raw_text = resp.choices[0].message.content or ""
+    pred_text = _SPECIAL_TOKEN_RE.sub("", raw_text).strip()
+    return pred_text, raw_text
 
 
 def build_test_cases(args, loader, img_index):
