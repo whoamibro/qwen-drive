@@ -33,3 +33,5 @@ Qwen-VL-Series-Finetune/
 
 # Stray CLI artifacts
 --*
+cropped_ts_p
+traffic_signal_status_results
