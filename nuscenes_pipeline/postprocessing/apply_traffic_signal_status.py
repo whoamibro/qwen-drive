@@ -57,6 +57,9 @@ def apply_status(infos, status):
     color_counts, type_counts = Counter(), Counter()
     for sample_idx, info in enumerate(infos):
         n_cams = len(info["cams"])
+        # drop keys from withdrawn experiments (aspect/orientation labeling)
+        info.pop("tl_apparent_aspect2d", None)
+        info.pop("tl_orientation2d", None)
         types, obs, colors, shapes, confs = [], [], [], [], []
         for cam_idx in range(n_cams):
             n = len(info["tl_bboxes2d"][cam_idx])

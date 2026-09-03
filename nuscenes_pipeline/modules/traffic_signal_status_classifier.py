@@ -153,6 +153,9 @@ def classify_one(client, model_name, row, crops_root, pad, min_side, max_tokens,
                 model=model_name, messages=messages, max_tokens=max_tokens, temperature=0.0)
             text = resp.choices[0].message.content
             label = normalize(extract_json_object(text))
+            if label is None and attempt < retries:
+                last_err = ValueError(f"unparseable/out-of-enum response: {text[:120]!r}")
+                continue  # re-ask the model
             return {
                 "file": row["file"], "split": row["split"], "sample_idx": row["sample_idx"],
                 "token": row["token"], "camera": row["camera"], "cam_idx": row["cam_idx"],
@@ -186,7 +189,7 @@ def main():
                    help="Re-crop from source image with N context px (0 = use stored crop as-is). "
                         "8 px + --min_side 160 cut false 'not_a_signal' from 66%% to 14%% on a val probe")
     p.add_argument("--min_side", type=int, default=160, help="Upsample crops whose short side is below this")
-    p.add_argument("--max_tokens", type=int, default=120)
+    p.add_argument("--max_tokens", type=int, default=150)
     p.add_argument("--retries", type=int, default=2)
     p.add_argument("--limit", type=int, default=None, help="Only the first N pending crops (debug)")
     p.add_argument("--sample_indices", type=int, nargs="+", default=None, help="Restrict to these pkl sample indices")
