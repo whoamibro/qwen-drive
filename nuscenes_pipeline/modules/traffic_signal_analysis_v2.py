@@ -94,9 +94,16 @@ def _prompt_bbox(box, is_rear: bool, resize_factor: int):
 
 def build_traffic_signal_block(info: dict, resize_factor: int = 1,
                                min_det_score: Optional[float] = None,
-                               include_not_a_signal: bool = False) -> str:
+                               include_not_a_signal: bool = False,
+                               include_rear: bool = False) -> str:
     """Format the pkl's detected+classified traffic signals like the
-    risk_assessment object list. Returns "" if the pkl has no tl_* arrays."""
+    risk_assessment object list. Returns "" if the pkl has no tl_* arrays.
+
+    Filtering at load time (both counts are disclosed in the block header):
+      - detections classified not_a_signal are dropped (include_not_a_signal)
+      - rear-view detections (Images 4-6) are dropped (include_rear) — rear
+        signals never govern ego's current lane, whether or not the rear
+        images are given to the model."""
     if "tl_bboxes2d" not in info:
         return ""
     has_status = "tl_light_color2d" in info
@@ -104,7 +111,10 @@ def build_traffic_signal_block(info: dict, resize_factor: int = 1,
 
     entries = []
     n_dropped_nas = 0
-    n_poles = sum(len(p) for p in info.get("tl_pole_bboxes2d", []))
+    n_dropped_rear = 0
+    n_poles = sum(len(info["tl_pole_bboxes2d"][cam_names.index(c)])
+                  for c in cam_names
+                  if include_rear or not c.startswith("CAM_BACK"))
     # Entries ordered by image number for readability
     for cam in sorted(cam_names, key=lambda c: CAM_TO_IMAGE[c][0]):
         ci = cam_names.index(cam)
@@ -117,6 +127,9 @@ def build_traffic_signal_block(info: dict, resize_factor: int = 1,
             sig_type = str(info["tl_signal_type2d"][ci][si]) if has_status else "unknown"
             if sig_type == "not_a_signal" and not include_not_a_signal:
                 n_dropped_nas += 1
+                continue
+            if is_rear and not include_rear:
+                n_dropped_rear += 1
                 continue
             observable = bool(info["tl_light_observable2d"][ci][si]) if has_status else False
             color = str(info["tl_light_color2d"][ci][si]) if has_status else "unknown"
@@ -141,21 +154,28 @@ def build_traffic_signal_block(info: dict, resize_factor: int = 1,
 TS {len(entries) + 1}: {type_desc} [{cam_info}]
 {type_desc}, {status_desc} | {conf_desc}{pole_desc}""")
 
+    omit_parts = []
+    if n_dropped_nas:
+        omit_parts.append(f"{n_dropped_nas} detection(s) classified as non-signals")
+    if n_dropped_rear:
+        omit_parts.append(f"{n_dropped_rear} rear-view (Images 4-6) detection(s)")
+    omit_note = (f"\nNote: {' and '.join(omit_parts)} are omitted by design — "
+                 "do not look for them and do not report them as MISSING." if omit_parts else "")
+
     if not entries:
-        note = " (after filtering detector false positives)" if n_dropped_nas else ""
         return f"""
 =====
 DETECTED TRAFFIC SIGNAL INFORMATION
 =====
-No traffic signals were detected in any camera view by the dedicated detector{note}.
+No front-view traffic signals were detected by the dedicated detector.{omit_note}
 =====
 """
 
     header = f"""
 =====
 DETECTED TRAFFIC SIGNAL INFORMATION
-({len(entries)} signal detections across the camera views; {n_poles} signal poles detected)
-Source: dedicated traffic-signal detector + per-crop status classifier
+({len(entries)} signal detections in the front views; {n_poles} signal poles detected)
+Source: dedicated traffic-signal detector + per-crop status classifier{omit_note}
 ====="""
     constraint = """
 =====
@@ -165,7 +185,7 @@ Source: dedicated traffic-signal detector + per-crop status classifier
 - "light NOT observable" means the lamp state could not be read from that view — the signal still physically exists there
 - Status labels are automatic and may err on tiny or blurry signals; when a label disagrees with what you clearly see in the images, trust the images and say so
 - These detections do NOT tell you which signal governs ego's lane — you MUST still apply the Traffic Flow Test and orientation checks to each one
-- Rear-view entries (Images 4-6) are behind ego and never govern ego's current lane
+- Signals in the rear views (Images 4-6) are NOT listed by design — rear signals never govern ego's current lane. Do NOT evaluate the rear views for signals and NEVER report MISSING for anything seen in Images 4-6
 ====="""
     return header + "".join(entries) + constraint + "\n"
 
@@ -192,6 +212,19 @@ Traffic signals are positioned above or aligned with their corresponding lanes:
 1. Determine ego lane from road markings (arrows, lane lines)
 2. Find signal aligned with that lane
 3. Consider intersection geometry, not just signal position in image"""
+
+# Revised in v2: D1 step 1 and C2's Waiting row told the model to SCAN for
+# signals — in v2 the detections AND their identified status are provided
+# through the user prompt, so the guide must say "evaluate the given entries".
+D1_SCAN_ORIGINAL = "1. SCAN all front-facing views (Images 1, 2, 3) for traffic signals"
+D1_SCAN_REVISED = ("1. TAKE the GIVEN TS entries — the detections AND their identified lamp "
+                   "status are provided through the user prompt; do NOT search the images for "
+                   "additional signals (report MISSING, front views only, if a governing signal "
+                   "is clearly absent from the list)")
+C2_WAITING_ORIGINAL = ("| **Waiting** | Before stop line | ≈ 0 | Scan all front views; "
+                       "apply Traffic Flow Test to each signal |")
+C2_WAITING_REVISED = ("| **Waiting** | Before stop line | ≈ 0 | Evaluate the given TS entries; "
+                      "apply Traffic Flow Test to each |")
 
 B1_REVISED = """### B1. GENERAL PRINCIPLES
 Traffic signals are positioned above or aligned with their corresponding lanes:
@@ -224,8 +257,11 @@ def build_camera_setup_block(sample, loader, use_global_coords: bool) -> str:
     cam_extrinsics = []
     for i, cam_name in enumerate(loader.CAMERA_NAMES, 1):
         cam_extrinsics.append(f"{i}. {fmt(sample.cameras[cam_name], cam_name)}")
+    frame_note = ("\n\nNote: the camera rotations above are in GLOBAL ENU coordinates; "
+                  "the per-image headings in PART C (C1) of the guide are EGO-RELATIVE. "
+                  "Both describe the same cameras." if use_global_coords else "")
     return ("# CAMERA SETUP\nThe 6 cameras are mounted as follows:\n\n"
-            + "\n\n".join(cam_extrinsics) + "\n\n" + EXPECTED_VIEWS_BLOCK + "\n")
+            + "\n\n".join(cam_extrinsics) + frame_note + "\n\n" + EXPECTED_VIEWS_BLOCK + "\n")
 
 
 V2_STEPS_OUTPUT_RULES = """
@@ -234,6 +270,8 @@ V2_STEPS_OUTPUT_RULES = """
 **Step 0: SIGNAL REFERENCE CHECK**
 - Determine if signal reference is required based on System Prompt C7 (open road, roundabout, non-signalized intersection → NO)
 - If the TS list is empty AND no signalized intersection is visible → signal reference NOT required
+- **DETECTED signals do NOT by themselves mean a signal reference is required.** Whenever ego's CURRENT driving context needs no signal authorization — e.g., actively driving mid-block between intersections, crossing a bridge or overpass, on an open stretch, passing under a gantry, or leaving an intersection it has already cleared — the detector may still pick up signals that belong to a FUTURE decision point (typically with SMALL bboxes) or to roads that do not govern ego. In those situations no signal reference is needed yet.
+- Use the TS bbox SIZE as a first cue: tiny boxes → the governing point (intersection, crossing, etc.) is still far away. When size alone is ambiguous, understand the scene FIRST — judge ego's driving status (speed, lane, distance to a stop line / decision point) and the surrounding circumstances — and only then decide whether a signal reference is required.
 - If NO → Skip signal analysis, report reason
 - If YES → Proceed to Step 1
 
@@ -253,6 +291,7 @@ V2_STEPS_OUTPUT_RULES = """
 | US | Turn Right | **Simple** | Yield to pedestrians; Turn-on-Red may apply |
 | SG | Turn Right | **Complex** | Mid-turn: maintain departure signal |
 | SG | Turn Left | **Simple** | Yield to pedestrians; Turn-on-Red if signed |
+2-2b. Non-turn commands: a LANE CHANGE (left/right) is NOT a turn — Turn Type N/A; the signal reference follows the straight/through rules (and check the target-lane side for approaching vehicles). A U-TURN follows the Complex-turn rules of ego's region.
 2-3. If turning, determine turn phase:
 | Phase | Speed | Visual Cues | Signal Reference |
 |-------|-------|-------------|------------------|
@@ -265,7 +304,7 @@ V2_STEPS_OUTPUT_RULES = """
 - Combine the 6 views into ONE coherent scene: where does ego's road run, where do the crossing roads run, and where is the intersection (if any)?
 - Place each TS entry into that scene using its Image number and 2D bbox
 - GROUP TS entries that are the SAME physical signal seen from different views (adjacent cameras overlap; e.g., one mast-arm signal can appear in Image 1 AND Image 2)
-- Rear-view entries (Images 4-6) are behind ego: use them only for scene understanding (e.g., confirming ego is inside an intersection); they are NEVER the reference signal
+- The rear views (Images 4-6) carry NO TS entries by design: use those views only for scene understanding (e.g., confirming ego is inside an intersection). Never evaluate rear signals and never report MISSING for anything in Images 4-6
 
 **Step 4: PER-SIGNAL RELEVANCE CHECK (Traffic Flow Test + orientation)**
 For EACH front-view TS entry (Images 1-3) — do NOT search for additional signals:
@@ -302,7 +341,9 @@ IF 0 CANDIDATEs → Report UNCERTAIN.
 |-----------|-------------------|-------------|
 | Complex (US Left / SG Right) | Target lane side (ego will cross after turn) | Front (after turn begins) |
 | Simple (US Right / SG Left) | **Immediate crosswalk** (turn path crosses it) | Front-Right (US) / Front-Left (SG) |
-⚠️ **Pedestrian "WALK" signal ≠ Vehicle signal** — Always YIELD to pedestrians regardless of vehicle signal state.
+- Use the pedestrian-signal TS entries and their identified state as evidence: a RED standing-figure/hand near ego's crosswalk means pedestrians are being held; a WALK/green figure means the crosswalk is active.
+- An active WALK figure requires yielding ONLY when pedestrians are actually present in (or entering) the crosswalk. If the WALK figure is lit but the crosswalk is EMPTY, ego does not need to yield to it — focus instead on vehicles approaching from the side: from the LEFT-REAR when turning right, from the RIGHT-REAR when turning left.
+⚠️ **Pedestrian "WALK" signal ≠ Vehicle signal** — always YIELD to pedestrians who are actually in or entering the crosswalk, regardless of ego's vehicle signal state.
 ---
 ## OUTPUT FORMAT
 ```
@@ -336,17 +377,18 @@ IF 0 CANDIDATEs → Report UNCERTAIN.
 ```
 ---
 ## KEY RULES
-1. **Do NOT search for new signals** — evaluate and select ONLY among the given TS entries (report MISSING if one is clearly absent)
+1. **Do NOT search for new signals** — evaluate and select ONLY among the given TS entries (report MISSING only for a clearly absent governing signal in the FRONT views, Images 1-3; NEVER from the rear views)
 2. **Traffic Flow Test determines signal relevance** — Crossing-road vehicles near a signal → that signal is cross-traffic
 3. **Any front camera can contain the reference signal** — Image 1, 2, or 3; the Traffic Flow Test decides
 4. **"Turn Left/Right" ≠ "Front-Left/Right camera"** — Turn command = intended path, not camera
 5. **Same physical signal, multiple TS entries** — group them; select the GROUP, report all its TS ids
-6. **Rear entries (Images 4-6) are never the reference signal** — scene context only
-7. **Exclude pedestrian-signal entries as reference candidates** — but use them for the pedestrian check
+6. **Rear views (Images 4-6) carry NO TS entries by design** — scene context only; never select or report MISSING there
+7. **Exclude pedestrian-signal entries as reference candidates** — but use them (and their identified state) for the pedestrian check
 8. **Identified status is a prior, not ground truth** — on clear visual conflict, trust the images and say so
 9. **Complex Turn mid-turn** — Maintain departure authorization; do NOT re-select
 10. **Position > Color** — TOP=RED, MID=YELLOW, BOT=GREEN
 11. **Report UNCERTAIN** — if no TS entry passes the Traffic Flow Test + orientation check
+12. **Detected ≠ required** — when ego's current context needs no signal authorization (mid-block, crossing a bridge, open stretch, ...), small distant signal boxes alone do not require a signal reference; when ambiguous, judge the scene first (Step 0)
 ---
 ## TASK
 Determine the reference traffic signal for the ego vehicle's driving from the given detections and the panoramic scene, and report its state and the resulting authorization.
@@ -376,6 +418,8 @@ def create_traffic_signal_analysis_v2_prompt(sample, loader, info: dict,
     # v2 guide revisions (see constants above)
     system_prompt = system_prompt.replace(LARGE_VEHICLE_PARAGRAPH, "\n", 1)
     system_prompt = system_prompt.replace(B1_ORIGINAL, B1_REVISED, 1)
+    system_prompt = system_prompt.replace(D1_SCAN_ORIGINAL, D1_SCAN_REVISED, 1)
+    system_prompt = system_prompt.replace(C2_WAITING_ORIGINAL, C2_WAITING_REVISED, 1)
     m = re.search(r"\*\*Ego Vehicle Status:\*\*\n(.*?)\n---", v1_user_prompt, re.DOTALL)
     ego_status = m.group(1) if m else "(ego status unavailable)"
     block = build_traffic_signal_block(info, resize_factor=resize_factor,
